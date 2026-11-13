@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Infosprint Monitoring - read-only cross-account IAM role. Lets Infosprint's scanner assume this role
+  to review the account (GuardDuty, Security Hub, Inspector, EC2 and backup configuration). No write access.
+
+Parameters:
+  TrustedPrincipal:
+    Type: String
+    Description: >-
+      Infosprint AWS account ID (12 digits) or the full ARN of the IAM user/role that is allowed to assume this role.
+    AllowedPattern: '^([0-9]{12}|arn:aws[a-z-]*:iam::[0-9]{12}:(root|user/.+|role/.+))$'
+    ConstraintDescription: >-
+      Enter a 12-digit account ID (digits only, no spaces) or an IAM user/role ARN such as
+      arn:aws:iam::123456789012:role/MyRole. STS assumed-role ARNs are not accepted.
+  RoleName:
+    Type: String
+    Default: InfosprintReadOnly
+    Description: Name of the IAM role to create. Enter this name in the Infosprint Monitoring console.
+    AllowedPattern: '^[\w+=,.@-]{1,64}$'
+  ExternalId:
+    Type: String
+    Default: ''
+    NoEcho: false
+    Description: Optional. If set, the role can only be assumed when this External ID is supplied. Enter the same value in the console.
+  MaxSessionDuration:
+    Type: Number
+    Default: 3600
+    MinValue: 3600
+    MaxValue: 43200
+    Description: Maximum session length in seconds.
+
+Conditions:
+  UseExternalId: !Not [!Equals [!Ref ExternalId, '']]
+
+Resources:
+  InfosprintReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      Description: Read-only access for Infosprint security and backup posture scans
+      MaxSessionDuration: !Ref MaxSessionDuration
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref TrustedPrincipal
+            Action: sts:AssumeRole
+            Condition: !If
+              - UseExternalId
+              - StringEquals:
+                  sts:ExternalId: !Ref ExternalId
+              - !Ref AWS::NoValue
+      # Read-only access to the whole account
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        # Explicit grants for the calls the scanner relies on (already covered by ReadOnlyAccess,
+        # kept so the role keeps working if the managed policy is ever narrowed).
+        - PolicyName: InfosprintScanFindings
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ScanReadOnly
+                Effect: Allow
+                Action:
+                  - ec2:DescribeRegions
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeImages
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeFlowLogs
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - elasticloadbalancing:DescribeLoadBalancers
+                  - elasticloadbalancing:DescribeLoadBalancerAttributes
+                  - cloudfront:ListDistributions
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:ListRealtimeLogConfigs
+                  - logs:DescribeDeliverySources
+                  - logs:DescribeDeliveries
+                  - guardduty:ListDetectors
+                  - guardduty:GetDetector
+                  - guardduty:ListFindings
+                  - guardduty:GetFindings
+                  - securityhub:DescribeHub
+                  - securityhub:GetFindings
+                  - inspector2:BatchGetAccountStatus
+                  - inspector2:ListFindings
+                  - backup:ListProtectedResources
+                  - dlm:GetLifecyclePolicies
+                  - dlm:GetLifecyclePolicy
+                Resource: '*'
+      Tags:
+        - Key: Purpose
+          Value: InfosprintMonitoring
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  RoleArn:
+    Description: Give this role ARN (or just the role name) to Infosprint
+    Value: !GetAtt InfosprintReadOnlyRole.Arn
+  RoleName:
+    Value: !Ref InfosprintReadOnlyRole
+  AccountId:
+    Description: Account ID to register in the console
+    Value: !Ref AWS::AccountId

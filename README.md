@@ -1,0 +1,97 @@
+# Infosprint Monitoring
+
+Multi-account AWS scanner with a React console and a Node.js API. **No database** – clients live in `data/clients.json`; every scan writes a separate report per client under `reports/<client>-<accountId>/` (HTML + JSON).
+
+## What a scan checks (per client, using that client's read-only IAM role)
+
+1. Assumes the client's role via STS and verifies it landed in the expected account.
+2. Finds every enabled region and lists EC2 instances (pending/running/stopping/stopped).
+3. **Only in regions that have instances**, checks whether **GuardDuty**, **Security Hub** and **Inspector (EC2 scanning)** are enabled. If not → recommendation with the reason it matters.
+4. For every instance, checks backup coverage:
+   - **PROTECTED** – an AWS Backup plan (protected resource) or a DLM snapshot/AMI lifecycle policy covers the instance or all its volumes
+   - **PARTIAL** – only some volumes are covered
+   - **MANUAL_ONLY** – snapshots/AMIs exist but no policy automates them
+   - **NONE** – nothing at all → "backup is not enabled" recommendation
+4b. **Network exposure and logging (all regions)**: security groups with ports open to `0.0.0.0/0` / `::/0` (Critical: all traffic, SSH/RDP/database/admin ports or wide ranges; High: other ports; 80/443 and ICMP only are counted, not listed), VPCs without flow logs, load balancers (ALB/NLB/Classic) without access logs, and CloudFront distributions without logging. Each comes with a reason and a recommendation, shown right after the backup section. Needs the extra read-only actions in the CloudFormation template (re-deploy/update the stack for existing clients).
+5. Collects every **active GuardDuty, Security Hub and Inspector finding** in those regions (services that are enabled), each with the remediation the service gives:
+   - **Security Hub** and **Inspector** – the remediation text/link from the finding itself (Inspector also lists the fixed package versions).
+   - **GuardDuty** – the API returns no remediation text, so the report uses AWS's GuardDuty remediation guide for the finding's resource type (EC2, credentials, S3, EKS, runtime, ECS) with a link.
+   - Security Hub findings that merely repeat GuardDuty/Inspector are left out; informational (passed) findings are skipped. Limit: 500 findings per service per region (most severe first), change with the `FINDINGS_CAP` environment variable. Anything cut off is noted in *Scan warnings*.
+6. Writes `reports/<client>-<accountId>/<timestamp>.html` and `.json`.
+
+Checks that fail (e.g. access denied) are listed under *Scan warnings* – they never produce a false "not enabled" recommendation.
+
+## Run it (Windows PowerShell, in this project folder)
+
+Prerequisites: Node.js 18+ and AWS credentials on the machine running the app (this is the identity that calls `sts:AssumeRole` into each client role – e.g. `aws configure`, `aws sso login`, or `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` env vars).
+
+```powershell
+npm run setup      # installs root, server and client dependencies
+npm run build      # builds the React console
+npm start          # then open http://127.0.0.1:4000
+```
+
+Development with hot reload: `npm run dev` (UI on http://localhost:5173, API on :4000).
+
+To use a specific profile: `$env:AWS_PROFILE="infosprint-admin"; npm start`
+
+The server listens on `127.0.0.1` only (there is no login on the console).
+
+## IAM setup in each client account
+
+**Easiest: CloudFormation.** Give the client `cloudformation/infosprint-readonly-role.yaml`. In the client account: CloudFormation > Create stack > Upload template. Parameters: `TrustedPrincipal` (your Infosprint account ID or the ARN of the identity running this app), optional `RoleName` and `ExternalId`. The stack creates the role with the AWS-managed `ReadOnlyAccess` policy. Copy the `RoleArn` output into the console.
+
+Or create the role by hand:
+
+**Permissions on the client role** – attach the AWS-managed `ReadOnlyAccess` policy, or this minimal policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DescribeRegions", "ec2:DescribeInstances", "ec2:DescribeVolumes",
+      "ec2:DescribeSnapshots", "ec2:DescribeImages",
+      "guardduty:ListDetectors", "guardduty:GetDetector", "guardduty:ListFindings", "guardduty:GetFindings",
+      "securityhub:DescribeHub", "securityhub:GetFindings",
+      "inspector2:BatchGetAccountStatus", "inspector2:ListFindings",
+      "backup:ListProtectedResources",
+      "dlm:GetLifecyclePolicies", "dlm:GetLifecyclePolicy"
+    ],
+    "Resource": "*"
+  }]
+}
+```
+
+**Trust policy** – allow the identity running this app (replace the principal ARN; add the ExternalId condition if you use one):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<YOUR-INFOSPRINT-ACCOUNT>:user/<or role>" },
+    "Action": "sts:AssumeRole",
+    "Condition": { "StringEquals": { "sts:ExternalId": "<optional-external-id>" } }
+  }]
+}
+```
+
+The identity running the app also needs `sts:AssumeRole` on those role ARNs.
+
+## Notes
+
+- DLM policies are matched to an instance/volume when it carries at least one of the policy's target tags (key and value).
+- `ReadOnlyAccess` also allows reading data such as S3 objects. If a client objects, use the minimal policy above instead.
+- Scans can take a few minutes per account (regions are scanned 4 at a time).
+- `data/clients.json` contains account IDs and role ARNs (no secrets). Add it to `.gitignore` if the repo is shared.
+
+## Layout
+
+```
+data/clients.json     client list (created automatically)
+reports/              generated reports, one folder per client
+server/src            Express API, scanner, report generator
+client/src            React console
+```

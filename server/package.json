@@ -1,0 +1,26 @@
+{
+  "name": "infosprint-monitoring-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node src/selftest.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-backup": "^3.700.0",
+    "@aws-sdk/client-cloudfront": "^3.700.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.700.0",
+    "@aws-sdk/client-dlm": "^3.700.0",
+    "@aws-sdk/client-ec2": "^3.700.0",
+    "@aws-sdk/client-elastic-load-balancing": "^3.700.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.700.0",
+    "@aws-sdk/client-guardduty": "^3.700.0",
+    "@aws-sdk/client-inspector2": "^3.700.0",
+    "@aws-sdk/client-securityhub": "^3.700.0",
+    "@aws-sdk/client-sts": "^3.700.0",
+    "docx": "^9.0.2",
+    "express": "^4.21.0"
+  }
+}
