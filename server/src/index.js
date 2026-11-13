@@ -3,16 +3,58 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const store = require('./store');
+const auth = require('./auth');
 const jobs = require('./jobs');
 const reports = require('./report');
 const { buildDocx } = require('./docx');
 
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+app.set('trust proxy', 'loopback'); // nginx on this machine passes the real client IP and protocol
+app.use(express.json({ limit: '100kb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 const wrap = (fn) => (req, res) => {
   try { fn(req, res); } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 };
+
+const awrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => res.status(e.status || 400).json({ error: e.message }));
+
+/* sign-in: everything under /api except login/logout/me needs a signed-in user */
+app.use('/api', auth.sameOrigin, auth.attach);
+
+app.post('/api/auth/login', awrap(async (req, res) => {
+  const { email, password } = req.body || {};
+  const user = await auth.login(email, password, req.ip);
+  auth.setSessionCookie(req, res, auth.createSession(user.id));
+  res.json(user);
+}));
+app.post('/api/auth/logout', (req, res) => {
+  if (req.sessionToken) auth.destroySession(req.sessionToken);
+  auth.clearSessionCookie(req, res);
+  res.status(204).end();
+});
+app.get('/api/auth/me', (req, res) => (req.user ? res.json(req.user) : res.status(401).json({ error: 'Not signed in' })));
+app.post('/api/auth/change-password', auth.requireAuth, awrap(async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  const user = await auth.changeOwnPassword(req.user.id, currentPassword, newPassword);
+  auth.setSessionCookie(req, res, auth.createSession(user.id)); // other sessions were ended; keep this one signed in
+  res.json(user);
+}));
+
+app.use('/api', auth.requireAuth);
+
+/* user administration (admins only) */
+app.get('/api/users', auth.requireAdmin, wrap((req, res) => res.json(auth.list())));
+app.post('/api/users', auth.requireAdmin, awrap(async (req, res) => res.status(201).json(await auth.createUser(req.body || {}))));
+app.put('/api/users/:id', auth.requireAdmin, wrap((req, res) => res.json(auth.updateUser(req.params.id, req.body || {}, req.user.id))));
+app.post('/api/users/:id/reset-password', auth.requireAdmin, awrap(async (req, res) => res.json(await auth.resetPassword(req.params.id, (req.body || {}).password))));
+app.delete('/api/users/:id', auth.requireAdmin, wrap((req, res) => { auth.removeUser(req.params.id, req.user.id); res.status(204).end(); }));
 
 /* clients (stored in data/clients.json) */
 app.get('/api/clients', wrap((req, res) => res.json(store.list())));
@@ -72,8 +114,11 @@ if (fs.existsSync(dist)) {
 }
 
 const PORT = process.env.PORT || 4000;
-// Bound to localhost only: this console can trigger scans against client accounts and has no login.
-const server = app.listen(PORT, '127.0.0.1', () => console.log(`Infosprint Monitoring running on http://127.0.0.1:${PORT}`));
+// Bound to localhost only (nginx fronts it). All /api routes require a signed-in user.
+const server = app.listen(PORT, '127.0.0.1', () => {
+  console.log(`Infosprint Monitoring running on http://127.0.0.1:${PORT}`);
+  if (!auth.count()) console.warn('No users exist yet, so nobody can sign in. Create the first admin with:  npm run create-admin');
+});
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
     console.error(`\nPort ${PORT} is already in use - an older copy of this app is probably still running.\nStop it (Ctrl+C in its window, or in PowerShell run:\n  Get-NetTCPConnection -LocalPort ${PORT} -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }\n) and run npm start again, or use another port: $env:PORT=4100; npm start\n`);

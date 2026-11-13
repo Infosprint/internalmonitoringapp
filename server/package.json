@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node src/selftest.js"
+    "test": "node src/selftest.js && node src/authtest.js"
   },
   "dependencies": {
     "@aws-sdk/client-backup": "^3.700.0",

@@ -2,6 +2,7 @@ node_modules/
 client/dist/
 reports/
 data/clients.json
+data/users.json
 data/*.tmp
 .env
 *.pem

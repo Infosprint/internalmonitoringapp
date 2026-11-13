@@ -21,6 +21,17 @@ Multi-account AWS scanner with a React console and a Node.js API. **No database*
 
 Checks that fail (e.g. access denied) are listed under *Scan warnings* – they never produce a false "not enabled" recommendation.
 
+## Sign-in and users
+
+The console requires a sign-in (email + password). Users are stored in `data/users.json` (scrypt password hashes only; the file is git-ignored). Two roles: **User** (use the console) and **Admin** (also manage users).
+
+- **First admin** (run on the machine that runs the app, in the project folder): `npm run create-admin`. Run it again with an existing email to reset that admin's password (recovery).
+- **Admin page** (`Users` in the top bar): add an employee (name, email, initial password or *Generate*), edit name/email/role, reset a password, disable/enable, delete. Resetting or disabling ends that person's open sessions immediately.
+- Everyone can change their own password under *Change password*.
+- Passwords: 10-128 characters. 5 failed sign-ins lock that account/IP for 15 minutes. Sessions end after 8 idle hours (`SESSION_HOURS` to change) and at most 24 hours; a server restart signs everyone out.
+- Behind nginx/HTTPS the proxy must send `X-Forwarded-Proto` and `X-Forwarded-For` (see the nginx block in the deployment notes) so the session cookie gets the `Secure` flag and rate limiting sees real client IPs. Set `COOKIE_SECURE=1` to force the flag.
+- Tests: `npm test --prefix server` (report logic + sign-in/user rules + an HTTP run against the real app).
+
 ## Run it (Windows PowerShell, in this project folder)
 
 Prerequisites: Node.js 18+ and AWS credentials on the machine running the app (this is the identity that calls `sts:AssumeRole` into each client role – e.g. `aws configure`, `aws sso login`, or `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` env vars).

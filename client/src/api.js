@@ -4,6 +4,7 @@ async function req(method, url, body) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  if (res.status === 401 && !url.startsWith('/api/auth/login')) window.dispatchEvent(new Event('auth-expired'));
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
@@ -11,6 +12,15 @@ async function req(method, url, body) {
 }
 
 export const api = {
+  me: () => req('GET', '/api/auth/me'),
+  login: (email, password) => req('POST', '/api/auth/login', { email, password }),
+  logout: () => req('POST', '/api/auth/logout'),
+  changePassword: (currentPassword, newPassword) => req('POST', '/api/auth/change-password', { currentPassword, newPassword }),
+  users: () => req('GET', '/api/users'),
+  addUser: (u) => req('POST', '/api/users', u),
+  updateUser: (id, u) => req('PUT', `/api/users/${id}`, u),
+  resetPassword: (id, password) => req('POST', `/api/users/${id}/reset-password`, { password }),
+  deleteUser: (id) => req('DELETE', `/api/users/${id}`),
   clients: () => req('GET', '/api/clients'),
   addClient: (c) => req('POST', '/api/clients', c),
   updateClient: (id, c) => req('PUT', `/api/clients/${id}`, c),

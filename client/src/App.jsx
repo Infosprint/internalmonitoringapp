@@ -213,8 +213,213 @@ function ClientFormPage({ id, clients, refresh }) {
   );
 }
 
+/* ---------- password helpers ---------- */
+function genPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const a = new Uint32Array(16);
+  window.crypto.getRandomValues(a);
+  return Array.from(a, (x) => chars[x % chars.length]).join('');
+}
+
+function PasswordField({ label, value, onChange, generate, autoComplete = 'new-password', placeholder = 'At least 10 characters' }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label>{label}
+      <div className="pw">
+        <input type={show ? 'text' : 'password'} autoComplete={autoComplete} value={value} placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)} minLength={10} maxLength={128} required />
+        <button type="button" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+        {generate && <button type="button" onClick={() => { onChange(genPassword()); setShow(true); }}>Generate</button>}
+      </div>
+    </label>
+  );
+}
+
+/* ---------- sign in ---------- */
+function LoginPage({ onSignedIn, notice }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try { onSignedIn(await api.login(email, password)); } catch (err) { setError(err.message); setBusy(false); }
+  }
+
+  return (
+    <div className="login">
+      <section className="card">
+        <h1>Infosprint Monitoring</h1>
+        <p className="muted">Sign in with your work email and password.</p>
+        {notice && <div className="notice">{notice}</div>}
+        {error && <div className="error" onClick={() => setError('')}>{error}</div>}
+        <form onSubmit={submit} className="stack">
+          <label>Email<input type="email" name="email" autoComplete="username" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+          <label>Password<input type="password" name="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+          <button className="primary" type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+        <p className="muted small">Forgot your password? Ask an administrator to reset it.</p>
+      </section>
+    </div>
+  );
+}
+
+/* ---------- change my password ---------- */
+function AccountPage() {
+  const [form, setForm] = useState({ current: '', next: '', again: '' });
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const set = (k) => (v) => setForm({ ...form, [k]: v });
+
+  async function submit(e) {
+    e.preventDefault();
+    setError(''); setDone(false);
+    if (form.next !== form.again) { setError('The new passwords do not match'); return; }
+    try { await api.changePassword(form.current, form.next); setForm({ current: '', next: '', again: '' }); setDone(true); } catch (err) { setError(err.message); }
+  }
+
+  return (
+    <>
+      <div className="topbar"><BackButton /><h1>Change password</h1></div>
+      {error && <div className="error" onClick={() => setError('')}>{error}</div>}
+      {done && <div className="notice">Password changed. Your other signed-in sessions were ended.</div>}
+      <section className="card narrow">
+        <form onSubmit={submit} className="stack" autoComplete="off">
+          <PasswordField label="Current password" value={form.current} onChange={set('current')} autoComplete="current-password" placeholder="" />
+          <PasswordField label="New password" value={form.next} onChange={set('next')} />
+          <PasswordField label="Repeat new password" value={form.again} onChange={set('again')} />
+          <div className="actions"><button className="primary" type="submit">Change password</button></div>
+        </form>
+      </section>
+    </>
+  );
+}
+
+/* ---------- admin: users ---------- */
+function UsersPage({ me }) {
+  const [users, setUsers] = useState([]);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'user' });
+  const [editing, setEditing] = useState(null);   // { id, name, email, role }
+  const [resetting, setResetting] = useState(null); // { id, password }
+
+  const load = useCallback(async () => { setUsers(await api.users()); }, []);
+  useEffect(() => { load().catch((e) => setError(e.message)); }, [load]);
+
+  async function run(fn, okMessage) {
+    setError(''); setNotice('');
+    try { await fn(); await load(); if (okMessage) setNotice(okMessage); return true; } catch (err) { setError(err.message); return false; }
+  }
+
+  async function add(e) {
+    e.preventDefault();
+    const pw = form.password;
+    if (await run(() => api.addUser(form), `Added ${form.name}. Share the password with them securely: ${pw}`)) setForm({ name: '', email: '', password: '', role: 'user' });
+  }
+  async function saveEdit(e) {
+    e.preventDefault();
+    if (await run(() => api.updateUser(editing.id, { name: editing.name, email: editing.email, role: editing.role }), 'User updated.')) setEditing(null);
+  }
+  async function saveReset(e, u) {
+    e.preventDefault();
+    const pw = resetting.password;
+    if (await run(() => api.resetPassword(u.id, pw), `Password reset for ${u.name}. Share the new password with them securely: ${pw}`)) setResetting(null);
+  }
+  const toggle = (u) => run(() => api.updateUser(u.id, { disabled: !u.disabled }), `${u.name} ${u.disabled ? 'enabled' : 'disabled'}.`);
+  const remove = (u) => { if (window.confirm(`Delete ${u.name} (${u.email})? This cannot be undone.`)) run(() => api.deleteUser(u.id), `${u.name} deleted.`); };
+  const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  return (
+    <>
+      <div className="topbar"><BackButton /><h1>Users</h1></div>
+      {error && <div className="error" onClick={() => setError('')}>{error}</div>}
+      {notice && <div className="notice" onClick={() => setNotice('')}>{notice}</div>}
+
+      <section className="card">
+        <h2>Add employee</h2>
+        <form onSubmit={add} className="grid" autoComplete="off">
+          <label>Name<input name="emp-name" autoComplete="off" value={form.name} onChange={setF('name')} placeholder="Employee name" required /></label>
+          <label>Email<input type="email" name="emp-email" autoComplete="off" value={form.email} onChange={setF('email')} placeholder="name@infosprint.com" required /></label>
+          <PasswordField label="Initial password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} generate />
+          <label>Role
+            <select value={form.role} onChange={setF('role')}><option value="user">User (can use the console)</option><option value="admin">Admin (can also manage users)</option></select>
+          </label>
+          <div className="actions"><button className="primary" type="submit">Add employee</button></div>
+        </form>
+      </section>
+
+      <section className="card">
+        <h2>Employees ({users.length})</h2>
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last sign-in</th><th /></tr></thead>
+          <tbody>
+            {users.map((u) => (
+              <React.Fragment key={u.id}>
+                <tr>
+                  <td>{editing?.id === u.id
+                    ? <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                    : <>{u.name}{u.id === me.id && <span className="muted"> (you)</span>}</>}</td>
+                  <td>{editing?.id === u.id
+                    ? <input type="email" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} />
+                    : u.email}</td>
+                  <td>{editing?.id === u.id
+                    ? <select value={editing.role} disabled={u.id === me.id} onChange={(e) => setEditing({ ...editing, role: e.target.value })}><option value="user">User</option><option value="admin">Admin</option></select>
+                    : u.role === 'admin' ? 'Admin' : 'User'}</td>
+                  <td>{u.disabled ? <span className="pill bad">Disabled</span> : <span className="pill ok">Active</span>}</td>
+                  <td className="muted">{u.lastLogin ? fmt(u.lastLogin) : 'Never'}</td>
+                  <td>
+                    <div className="row-actions">
+                      {editing?.id === u.id ? (
+                        <><button className="primary" onClick={saveEdit}>Save</button><button onClick={() => setEditing(null)}>Cancel</button></>
+                      ) : (
+                        <>
+                          <button onClick={() => { setResetting(null); setEditing({ id: u.id, name: u.name, email: u.email, role: u.role }); }}>Edit</button>
+                          <button onClick={() => { setEditing(null); setResetting({ id: u.id, password: '' }); }}>Reset password</button>
+                          {u.id !== me.id && <button onClick={() => toggle(u)}>{u.disabled ? 'Enable' : 'Disable'}</button>}
+                          {u.id !== me.id && <button className="danger" onClick={() => remove(u)}>Delete</button>}
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                {resetting?.id === u.id && (
+                  <tr><td colSpan="6">
+                    <form className="reset" onSubmit={(e) => saveReset(e, u)} autoComplete="off">
+                      <PasswordField label={`New password for ${u.name}`} value={resetting.password} onChange={(v) => setResetting({ ...resetting, password: v })} generate />
+                      <button className="primary" type="submit">Set password</button>
+                      <button type="button" onClick={() => setResetting(null)}>Cancel</button>
+                    </form>
+                  </td></tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </>
+  );
+}
+
+/* ---------- top bar with who is signed in ---------- */
+function UserBar({ user, onSignOut }) {
+  return (
+    <nav className="userbar">
+      <a href="#/">Clients</a>
+      {user.role === 'admin' && <a href="#/users">Users</a>}
+      <span className="grow" />
+      <span className="muted">{user.name} ({user.role})</span>
+      <a href="#/account">Change password</a>
+      <button onClick={onSignOut}>Sign out</button>
+    </nav>
+  );
+}
+
 /* ---------- app shell ---------- */
-export default function App() {
+function Console({ user, onSignOut }) {
   const route = useRoute();
   const [clients, setClients] = useState([]);
   const [reports, setReports] = useState([]);
@@ -255,7 +460,9 @@ export default function App() {
   const parts = route.split('/').filter(Boolean);
 
   let page;
-  if (parts[0] === 'clients' && parts[1] === 'new') page = <ClientFormPage key="new" id="new" clients={clients} refresh={refresh} />;
+  if (parts[0] === 'users' && user.role === 'admin') page = <UsersPage me={user} />;
+  else if (parts[0] === 'account') page = <AccountPage />;
+  else if (parts[0] === 'clients' && parts[1] === 'new') page = <ClientFormPage key="new" id="new" clients={clients} refresh={refresh} />;
   else if (parts[0] === 'clients' && parts[1] && parts[2] === 'edit') page = <ClientFormPage key={parts[1]} id={parts[1]} clients={clients} refresh={refresh} />;
   else if (parts[0] === 'client' && parts[1] && parts[2] === 'report' && parts[3] && parts[4]) page = <ReportViewPage clientId={parts[1]} folder={parts[3]} file={parts[4]} reports={reports} clients={clients} />;
   else if (parts[0] === 'client' && parts[1]) page = <ClientPage id={parts[1]} clients={clients} reports={reports} job={job} busy={busy} scan={scan} />;
@@ -263,8 +470,32 @@ export default function App() {
 
   return (
     <div className="wrap">
+      <UserBar user={user} onSignOut={onSignOut} />
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
       {page}
     </div>
   );
+}
+
+export default function App() {
+  const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => { api.me().then(setUser).catch(() => setUser(null)); }, []);
+  useEffect(() => {
+    const expired = () => { setUser((u) => { if (u) setNotice('Your session has ended. Please sign in again.'); return null; }); };
+    window.addEventListener('auth-expired', expired);
+    return () => window.removeEventListener('auth-expired', expired);
+  }, []);
+
+  async function signOut() {
+    try { await api.logout(); } catch { /* ignore */ }
+    setNotice('');
+    setUser(null);
+    window.location.hash = '#/';
+  }
+
+  if (user === undefined) return <div className="wrap"><p className="muted">Loading…</p></div>;
+  if (!user) return <LoginPage notice={notice} onSignedIn={(u) => { setNotice(''); window.location.hash = '#/'; setUser(u); }} />;
+  return <Console user={user} onSignOut={signOut} />;
 }
