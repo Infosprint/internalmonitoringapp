@@ -83,7 +83,7 @@ export function AmcOverview({ clientId }) {
             {a.instances.map((i) => (
               <React.Fragment key={i.instanceId}>
                 <tr>
-                  <td><b>{i.name || i.instanceId}</b><div className="muted">{i.instanceId} · {i.instanceType} · {i.region}</div>{ssmBadge(i.ssm.status)}</td>
+                  <td><span className="server-name"><span className={`dot ${i.state}`} /><b>{i.name || i.instanceId}</b></span><div className="muted">{i.instanceId} · {i.instanceType} · {i.region}</div>{ssmBadge(i.ssm.status)}</td>
                   <td>{i.state}</td>
                   <td>{i.cpu ? `${i.cpu.average}% / ${i.cpu.peak}%` : '—'}</td>
                   <td>{i.memory ? `${i.memory.average}% / ${i.memory.peak}%` : <span className="muted">not reported</span>}</td>
@@ -102,18 +102,24 @@ export function AmcOverview({ clientId }) {
 }
 
 /* ---------- Logs page ---------- */
-const TABS = [['vpc', 'VPC'], ['cloudtrail', 'CloudTrail'], ['loadbalancer', 'Load balancer'], ['cloudfront', 'CloudFront']];
+const TABS = [['vpc', 'VPC flow logs'], ['cloudtrail', 'CloudTrail'], ['loadbalancer', 'Load balancer'], ['cloudfront', 'CloudFront']];
 const DURATIONS = [['1h', '1 hour'], ['24h', '24 hours'], ['1w', '1 week'], ['15d', '15 days'], ['30d', '30 days']];
 const label = { vpc: 'VPC flow logs', cloudtrail: 'CloudTrail', loadbalancer: 'Load balancer access logs', cloudfront: 'CloudFront access logs' };
-const fmtBytes = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.ceil(b / 1024)} KB`);
+const HELP = {
+  vpc: 'VPCs without flow logs are listed but cannot be fetched.',
+  cloudtrail: 'Pick a region. Logs come from the trail\'s S3 files when readable (management and data events), otherwise from CloudTrail event history (management events, last 90 days).',
+  loadbalancer: 'Reads the access logs the load balancer writes to S3. Load balancers without access logs cannot be fetched.',
+  cloudfront: 'Reads standard access logs from the S3 bucket configured on the distribution.',
+};
+const fmtBytes = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.ceil(b / 1024))} KB`);
 
 export function LogsPage({ client, BackButton }) {
   const [src, setSrc] = useState(null);
   const [err, setErr] = useState('');
   const [tab, setTab] = useState('vpc');
+  const [q, setQ] = useState('');
   const [sel, setSel] = useState({ vpc: [], cloudtrail: [], loadbalancer: [], cloudfront: [] });
-  const [dlg, setDlg] = useState(false);
-  const [types, setTypes] = useState({});
+  const [dlg, setDlg] = useState(null); // { types: {...}, region }
   const [duration, setDuration] = useState('24h');
   const [job, setJob] = useState(null);
 
@@ -124,82 +130,105 @@ export function LogsPage({ client, BackButton }) {
     return () => clearInterval(t);
   }, [job, client.id]);
 
+  const okRow = (r) => r.fetchable;
   const toggle = (type, key) => setSel((s) => ({ ...s, [type]: s[type].includes(key) ? s[type].filter((k) => k !== key) : [...s[type], key] }));
-  const fetchable = (type) => (src?.[type] || []).filter((r) => type === 'cloudtrail' || r.fetchable);
   const counts = useMemo(() => Object.fromEntries(TABS.map(([t]) => [t, sel[t].length])), [sel]);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  function openDialog() { setTypes(Object.fromEntries(TABS.map(([t]) => [t, counts[t] > 0]))); setDlg(true); setJob(null); }
+  function openDialog(onlyTab) {
+    const types = Object.fromEntries(TABS.map(([t]) => [t, onlyTab ? t === onlyTab : counts[t] > 0]));
+    setDlg({ types, onlyTab, region: sel.cloudtrail[0] || (src?.cloudtrail || []).find((r) => r.region === 'ap-south-1')?.key || src?.cloudtrail?.[0]?.key || '' });
+  }
   async function start() {
     setErr('');
-    const selections = Object.fromEntries(TABS.map(([t]) => [t, types[t] ? sel[t] : []]));
-    try { setJob(await api.fetchLogs(client.id, { selections, duration })); setDlg(false); } catch (e) { setErr(e.message); }
+    const selections = Object.fromEntries(TABS.map(([t]) => [t, !dlg.types[t] ? [] : t === 'cloudtrail' && dlg.onlyTab === 'cloudtrail' ? [dlg.region] : sel[t]]));
+    if (dlg.types.cloudtrail && !selections.cloudtrail.length && dlg.region) selections.cloudtrail = [dlg.region];
+    try { setJob(await api.fetchLogs(client.id, { selections, duration })); setDlg(null); } catch (e) { setErr(e.message); }
   }
 
-  const rows = src?.[tab] || [];
+  const rows = (src?.[tab] || []).filter((r) => !q || `${r.name || ''} ${r.vpcId || ''} ${r.region || ''} ${r.id || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const busy = job?.status === 'running';
+  const trailInfo = (r) => (r.trails?.length ? `${r.trails.length} trail(s): ${r.trails.map((t) => t.name).slice(0, 2).join(', ')}` : 'No trail in this region, event history will be used');
+
   return (
     <>
-      <div className="topbar"><BackButton fallback={`/client/${client.id}`} /><div className="grow"><h1>Logs: {client.clientName}</h1><p className="muted">Select what to fetch, then choose the log types and the time period.</p></div>
-        <div className="row-actions"><button className="primary" disabled={!Object.values(counts).some(Boolean) || job?.status === 'running'} onClick={openDialog}>Fetch logs</button></div></div>
+      <div className="topbar"><BackButton fallback={`/client/${client.id}`} />
+        <div className="grow"><h1>Logs</h1><p className="muted">{client.clientName} · account {client.accountId}</p></div>
+        <div className="row-actions">
+          {tab === 'cloudtrail' && <button className="primary" disabled={busy || !src} onClick={() => openDialog('cloudtrail')}>Fetch CloudTrail logs</button>}
+          <button className={tab === 'cloudtrail' ? '' : 'primary'} disabled={!total || busy} onClick={() => openDialog(null)}>Fetch selected ({total})</button>
+        </div>
+      </div>
       {err && <div className="error" onClick={() => setErr('')}>{err}</div>}
 
       {job && (
-        <section className="card">
+        <section className="card job">
           <h2>Log export</h2>
-          <p>{job.status === 'running' ? <>⏳ {job.progress}</> : job.status === 'done' ? '✅ Ready' : `${job.status}: ${job.progress}`}</p>
-          {job.files.length > 0 && <ul>{job.files.map((f) => <li key={f.name}>{f.name} ({fmtBytes(f.bytes)}, {f.lines} lines)</li>)}</ul>}
+          {busy && <><div className="bar"><i /></div><p className="muted">{job.progress}</p></>}
+          {job.status === 'done' && <p><span className="pill ok">Ready</span> Your export is ready to download.</p>}
+          {(job.status === 'failed' || job.status === 'cancelled') && <p><span className="pill bad">{job.status}</span> {job.progress}</p>}
+          {job.files.length > 0 && <ul className="filelist">{job.files.map((f) => <li key={f.name}><span><b>{label[f.type]}</b> · {f.name}</span><span className="muted">{fmtBytes(f.bytes)} · {f.lines.toLocaleString()} lines</span></li>)}</ul>}
           {job.notes.map((n, k) => <div key={k} className="notice">{n}</div>)}
-          <div className="row-actions">
-            {job.status === 'running' && <button className="danger" onClick={() => api.cancelLogJob(client.id, job.id).then(setJob)}>Cancel</button>}
-            {job.status === 'done' && job.download && <a className="btn word" href={`/api/clients/${client.id}/logs/jobs/${job.id}/download`} download>Download {job.files.length > 1 ? 'zip' : 'file'}</a>}
+          <div className="row-actions" style={{ justifyContent: 'flex-start' }}>
+            {busy && <button className="danger" onClick={() => api.cancelLogJob(client.id, job.id).then(setJob)}>Cancel</button>}
+            {job.status === 'done' && job.download && <a className="btn word" href={`/api/clients/${client.id}/logs/jobs/${job.id}/download`} download>⬇ Download {job.files.length > 1 ? 'zip' : 'file'}</a>}
           </div>
-          <p className="muted">Exports are kept on the server for 24 hours.</p>
+          <span className="muted small">Exports are kept on the server for 24 hours.</span>
         </section>
       )}
 
       <section className="card">
-        <div className="tabs">{TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{n}{counts[t] ? ` (${counts[t]})` : ''}</button>)}</div>
-        {!src && !err && <p className="muted">Looking up log sources in the account (this can take a minute)…</p>}
+        <div className="tabs">{TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => { setTab(t); setQ(''); }}>{n}{counts[t] ? <span className="count">{counts[t]}</span> : null}</button>)}</div>
+        <p className="muted" style={{ marginTop: 0 }}>{HELP[tab]}</p>
+        {!src && !err && <><div className="bar"><i /></div><p className="muted">Looking up log sources in the account. This can take a minute.</p></>}
         {src && <>
           {src.warnings?.length > 0 && <div className="notice">{src.warnings.length} lookup warning(s), e.g. {src.warnings[0]}</div>}
-          {tab === 'cloudtrail' && <p className="muted">Fetches management events from the CloudTrail event history of the trail's region (up to 90 days). Data events need the trail's S3 bucket and are not included.</p>}
-          {tab === 'loadbalancer' && <p className="muted">Reads the access logs the load balancer writes to S3. Load balancers without access logs cannot be fetched.</p>}
-          {tab === 'cloudfront' && <p className="muted">Reads standard (legacy) access logs from the S3 bucket configured on the distribution.</p>}
-          {!rows.length ? <p className="muted">Nothing found.</p> : (
-            <table>
-              <thead><tr><th /><th>Name</th><th>Region</th><th>Logging</th><th /></tr></thead>
-              <tbody>{rows.map((r) => {
-                const ok = tab === 'cloudtrail' || r.fetchable;
-                const key = r.key;
-                return (
-                  <tr key={key} className={ok ? '' : 'muted-row'}>
-                    <td><input type="checkbox" disabled={!ok} checked={sel[tab].includes(key)} onChange={() => toggle(tab, key)} /></td>
-                    <td><b>{r.name || r.vpcId || r.id}</b>{tab === 'vpc' && <div className="muted">{r.vpcId}{r.isDefault ? ' · default VPC' : ''}</div>}{tab === 'cloudfront' && r.aliases?.length > 0 && <div className="muted">{r.aliases.join(', ')}</div>}</td>
-                    <td>{r.region || 'global'}</td>
-                    <td>{tab === 'cloudtrail' ? <Badge kind="ok">Trail</Badge> : r.fetchable ? <Badge kind="ok">Enabled</Badge> : r.enabled ? <Badge kind="warn">Enabled, not readable</Badge> : <Badge kind="bad">Not enabled</Badge>}{r.note && <div className="muted">{r.note}</div>}</td>
-                    <td className="muted">{ok ? '' : 'Cannot fetch'}</td>
-                  </tr>
-                );
-              })}</tbody>
-            </table>
-          )}
-          {fetchable(tab).length > 1 && <div className="row-actions" style={{ marginTop: 8 }}>
-            <button onClick={() => setSel((s) => ({ ...s, [tab]: fetchable(tab).map((r) => r.key) }))}>Select all</button>
-            <button onClick={() => setSel((s) => ({ ...s, [tab]: [] }))}>Clear</button></div>}
+          <div className="toolbar" style={{ marginTop: 12 }}>
+            <input placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+            {(src[tab] || []).filter(okRow).length > 1 && <>
+              <button onClick={() => setSel((s) => ({ ...s, [tab]: (src[tab] || []).filter(okRow).map((r) => r.key) }))}>Select all</button>
+              <button onClick={() => setSel((s) => ({ ...s, [tab]: [] }))}>Clear</button></>}
+          </div>
+          {!rows.length ? <div className="empty">Nothing found.</div> : rows.map((r) => (
+            <label key={r.key} className={`source-row ${okRow(r) ? '' : 'off'} ${sel[tab].includes(r.key) ? 'sel' : ''}`} style={{ flexDirection: 'row', alignItems: 'center', color: 'inherit', fontSize: 14 }}>
+              <input type="checkbox" disabled={!okRow(r)} checked={sel[tab].includes(r.key)} onChange={() => toggle(tab, r.key)} />
+              <span className="meta">
+                <b>{tab === 'cloudtrail' ? r.region : (r.name || r.vpcId || r.id)}</b>
+                <span className="muted small">
+                  {tab === 'vpc' && `${r.vpcId}${r.isDefault ? ' · default VPC' : ''} · ${r.region}`}
+                  {tab === 'cloudtrail' && trailInfo(r)}
+                  {tab === 'loadbalancer' && `${r.type} · ${r.region}`}
+                  {tab === 'cloudfront' && (r.aliases?.length ? r.aliases.join(', ') : r.id)}
+                </span>
+                {r.note && <span className="muted small"> · {r.note}</span>}
+              </span>
+              {tab === 'cloudtrail' ? <Badge kind={r.enabled ? 'ok' : 'warn'}>{r.enabled ? 'Trail' : 'Event history'}</Badge>
+                : r.fetchable ? <Badge kind="ok">Logging on</Badge> : r.enabled ? <Badge kind="warn">Not readable</Badge> : <Badge kind="bad">Logging off</Badge>}
+            </label>
+          ))}
         </>}
       </section>
 
       {dlg && (
-        <div className="modal-bg"><div className="modal">
-          <h2>Fetch logs</h2>
-          <p className="muted">Pick the log types to include. Each type becomes its own file; more than one type is delivered as a zip.</p>
-          {TABS.map(([t]) => (
-            <label key={t} className="check"><input type="checkbox" disabled={!counts[t]} checked={Boolean(types[t])} onChange={(e) => setTypes({ ...types, [t]: e.target.checked })} /> {label[t]} <span className="muted">({counts[t]} selected)</span></label>
-          ))}
-          <label className="check">Duration&nbsp;
-            <select value={duration} onChange={(e) => setDuration(e.target.value)}>{DURATIONS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}</select></label>
+        <div className="modal-bg" onClick={() => setDlg(null)}><div className="modal" onClick={(e) => e.stopPropagation()}>
+          <h2>{dlg.onlyTab === 'cloudtrail' ? 'Fetch CloudTrail logs' : 'Fetch logs'}</h2>
+          {dlg.onlyTab === 'cloudtrail' ? (
+            <label>Region<select value={dlg.region} onChange={(e) => setDlg({ ...dlg, region: e.target.value })}>
+              {(src?.cloudtrail || []).map((r) => <option key={r.key} value={r.key}>{r.region}{r.enabled ? ' (trail)' : ''}</option>)}</select></label>
+          ) : (
+            <>
+              <p className="muted" style={{ margin: 0 }}>Each log type becomes its own file; more than one type is delivered as a zip.</p>
+              {TABS.map(([t]) => (
+                <label key={t} className="check"><input type="checkbox" disabled={!counts[t]} checked={Boolean(dlg.types[t])} onChange={(e) => setDlg({ ...dlg, types: { ...dlg.types, [t]: e.target.checked } })} />
+                  {label[t]} <span className="muted">({counts[t]} selected)</span></label>
+              ))}
+            </>
+          )}
+          <div><div className="muted small" style={{ marginBottom: 6, fontWeight: 650 }}>TIME PERIOD</div>
+            <div className="chips">{DURATIONS.map(([v, n]) => <button key={v} type="button" className={`chip ${duration === v ? 'on' : ''}`} onClick={() => setDuration(v)}>{n}</button>)}</div></div>
           <div className="row-actions">
-            <button onClick={() => setDlg(false)}>Cancel</button>
-            <button className="primary" disabled={!Object.values(types).some(Boolean)} onClick={start}>Start fetch</button>
+            <button onClick={() => setDlg(null)}>Cancel</button>
+            <button className="primary" disabled={dlg.onlyTab === 'cloudtrail' ? !dlg.region : !Object.entries(dlg.types).some(([t, v]) => v && counts[t])} onClick={start}>Start fetch</button>
           </div>
         </div></div>
       )}

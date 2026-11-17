@@ -66,12 +66,19 @@ function Dashboard({ clients, job, busy, scan, remove, refresh, setError }) {
         </div>
       </header>
 
+      <div className="stats">
+        <div className="stat"><div className="n">{clients.length}</div><div className="l">Accounts</div></div>
+        <div className="stat green"><div className="n">{count('amc')}</div><div className="l">AMC partners</div></div>
+        <div className="stat amber"><div className="n">{count('billing')}</div><div className="l">Billing partners</div></div>
+        <div className="stat red"><div className="n">{clients.reduce((n, c) => n + (c.lastScan?.summary?.securityFindings ? c.lastScan.summary.securityFindings.critical + c.lastScan.summary.securityFindings.high : 0), 0)}</div><div className="l">Critical / high findings</div></div>
+      </div>
+
       <section className="card">
-        <div className="tabs">{PARTNER_TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => pick(t)}>{n} ({count(t)})</button>)}</div>
+        <div className="tabs">{PARTNER_TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => pick(t)}>{n}<span className="count">{count(t)}</span></button>)}</div>
         {tab === 'general' && <p className="muted">All onboarded accounts. Move an account to AMC partner (adds server metrics, health and log fetching to the scan) or Billing partner (standard scan).</p>}
         {tab === 'amc' && <p className="muted">AMC partners get the standard scan plus server inventory, 8-day CPU/RAM, storage, load balancer health and a Logs page.</p>}
         {tab === 'billing' && <p className="muted">Billing partners get the standard scan.</p>}
-        {!shown.length ? <p className="muted">{tab === 'general' ? 'No clients yet. Click “Add client”.' : 'No accounts in this tab yet. Move one from the General tab.'}</p> : (
+        {!shown.length ? <div className="empty">{tab === 'general' ? 'No clients yet. Click “Add client”.' : 'No accounts in this tab yet. Move one from the General tab.'}</div> : (
           <table>
             <thead><tr><th>Client</th><th>Account</th><th>Partner</th><th>Last scan</th><th>Status</th><th /></tr></thead>
             <tbody>
@@ -272,9 +279,20 @@ function LoginPage({ onSignedIn, notice }) {
   }
 
   return (
-    <div className="login">
+    <div className="login-shell">
+      <div className="hero">
+        <a className="brand" style={{ fontSize: 18 }}><i>◈</i>Infosprint Monitoring</a>
+        <h2>Know the health of every client AWS account.</h2>
+        <p>Security services, backups, network exposure, server health and logs in one console.</p>
+        <ul>
+          <li><i>🛡</i>GuardDuty, Inspector and Security Hub coverage</li>
+          <li><i>📈</i>CPU, RAM and storage for AMC partners</li>
+          <li><i>📥</i>One-click log export for audits</li>
+        </ul>
+      </div>
+      <div className="login">
       <section className="card">
-        <h1>Infosprint Monitoring</h1>
+        <h1>Welcome back</h1>
         <p className="muted">Sign in with your work email and password.</p>
         {notice && <div className="notice">{notice}</div>}
         {error && <div className="error" onClick={() => setError('')}>{error}</div>}
@@ -285,6 +303,7 @@ function LoginPage({ onSignedIn, notice }) {
         </form>
         <p className="muted small">Forgot your password? Ask an administrator to reset it.</p>
       </section>
+      </div>
     </div>
   );
 }
@@ -430,10 +449,11 @@ function UsersPage({ me }) {
 function UserBar({ user, onSignOut }) {
   return (
     <nav className="userbar">
+      <a className="brand" href="#/"><i>◈</i>Infosprint Monitoring</a>
       <a href="#/">Clients</a>
       {user.role === 'admin' && <a href="#/users">Users</a>}
       <span className="grow" />
-      <span className="muted">{user.name} ({user.role})</span>
+      <span className="who"><span className="avatar">{(user.name || '?').trim().slice(0, 1).toUpperCase()}</span>{user.name} <span className="muted">({user.role})</span></span>
       <a href="#/account">Change password</a>
       <button onClick={onSignOut}>Sign out</button>
     </nav>

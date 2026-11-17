@@ -121,16 +121,16 @@ function renderHtml(r) {
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${esc(r.client.name)} – AWS Security &amp; Backup Report</title>
 <style>
-body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f4f6f9;color:#1f2933}
+body{font-family:Inter,'Segoe UI Variable','Segoe UI',system-ui,Arial,sans-serif;margin:0;background:#f3f5fb;color:#0f172a;-webkit-font-smoothing:antialiased}
 .w{max-width:1100px;margin:0 auto;padding:28px}
-h1{margin:0 0 4px}h2{margin-top:32px;border-bottom:2px solid #dde3ea;padding-bottom:6px}
+h1{margin:0 0 4px;font-size:28px;letter-spacing:-.02em}h2{margin-top:34px;border-bottom:2px solid #c7d2fe;padding-bottom:8px;color:#312e81}
 .meta{color:#52606d;font-size:14px}
 .cards{display:flex;gap:12px;flex-wrap:wrap;margin:20px 0}
-.c{background:#fff;border-radius:8px;padding:14px 18px;min-width:130px;box-shadow:0 1px 3px #0001}
+.c{background:#fff;border-radius:14px;padding:14px 18px;min-width:130px;box-shadow:0 8px 24px -14px #0f172a40;border-top:3px solid #6366f1}
 .c .n{font-size:28px;font-weight:700}.c .l{font-size:12px;color:#52606d;text-transform:uppercase}
 table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}
 th,td{padding:8px 10px;border-bottom:1px solid #e4e7eb;text-align:left;vertical-align:top}
-th{background:#eef1f5}
+th{background:#eef0ff;color:#3730a3}
 .b{padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;white-space:nowrap}
 .ok{background:#d9f5e5;color:#116530}.bad{background:#fde0e0;color:#a31515}.warn{background:#fff1cc;color:#8a5a00}
 .f{background:#fff;border-left:5px solid #999;border-radius:6px;padding:12px 16px;margin:12px 0;box-shadow:0 1px 3px #0001}

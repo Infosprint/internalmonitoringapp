@@ -68,11 +68,13 @@ async function listSources(client) {
     } catch (e) { warn('VPCs', e); }
     try {
       const ct = new CloudTrailClient(opts);
-      const r = await ct.send(new DescribeTrailsCommand({ includeShadowTrails: false }));
-      if (region === regions[0] || (r.trailList || []).length) {
-        for (const t of r.trailList || []) if (t.HomeRegion === region) out.cloudtrail.push({ key: `${region}|${t.Name}`, region, name: t.Name, multiRegion: Boolean(t.IsMultiRegionTrail), bucket: t.S3BucketName || null });
-      }
-    } catch (e) { warn('CloudTrail', e); }
+      const r = await ct.send(new DescribeTrailsCommand({ includeShadowTrails: true }));
+      const trails = (r.trailList || []).map((t) => ({ name: t.Name, homeRegion: t.HomeRegion, multiRegion: Boolean(t.IsMultiRegionTrail), bucket: t.S3BucketName || null, prefix: t.S3KeyPrefix || '' }));
+      out.cloudtrail.push({ key: region, region, name: region, trails, enabled: trails.length > 0, fetchable: true });
+    } catch (e) {
+      warn('CloudTrail', e);
+      out.cloudtrail.push({ key: region, region, name: region, trails: [], enabled: false, fetchable: true });
+    }
     try {
       const elb = new ElasticLoadBalancingV2Client(opts);
       const lbs = await collect(elb, (m) => new DescribeLoadBalancersCommand({ Marker: m }), (r) => r.LoadBalancers, 'NextMarker', 'Marker');
@@ -102,9 +104,6 @@ async function listSources(client) {
       out.cloudfront.push({ key: d.Id, id: d.Id, name: d.DomainName, aliases: d.Aliases?.Items || [], enabled: Boolean(l?.Enabled), fetchable: Boolean(l?.Enabled && bucket), bucket, prefix: l?.Prefix || '' });
     });
   } catch (e) { out.warnings.push(`CloudFront: ${errMsg(e)}`); }
-  // CloudTrail event history works without any trail, so it is always fetchable per region
-  const ctRegions = new Set(out.cloudtrail.map((t) => t.region));
-  out.cloudtrailRegions = regions.filter((r) => ctRegions.has(r));
   for (const k of TYPES) if (Array.isArray(out[k])) out[k].sort((a, b) => `${a.region || ''}${a.name || a.id}`.localeCompare(`${b.region || ''}${b.name || b.id}`));
   return out;
 }
@@ -182,15 +181,55 @@ async function fetchVpc(client, credentials, sel, win, sink, ctx) {
   }
 }
 
-async function fetchCloudTrail(client, credentials, sel, win, sink, ctx) {
-  const regions = (sel && sel.length ? sel : []).map((k) => k.split('|')[0]);
-  const uniq = [...new Set(regions)];
-  if (!uniq.length) throw new Error('Select at least one CloudTrail region');
-  let events = 0;
-  for (const region of uniq) {
-    const ct = new CloudTrailClient({ region, credentials, maxAttempts: 8 });
-    await sink.write(`# --- CloudTrail management events, ${region} ---\n`);
+// Reads the CloudTrail log files a trail delivers to S3 (management and data events). Returns the number of files read.
+async function cloudTrailFromS3(trail, region, credentials, acct, win, sink, ctx) {
+  const s3 = s3For(credentials, region);
+  const prefixes = days(new Date(win.start), new Date(win.end)).map(([y, m, d]) => joinKey(trail.prefix, 'AWSLogs', acct, 'CloudTrail', region, y, m, d) + '/');
+  let files = 0;
+  for (const prefix of prefixes) {
     let token;
+    do {
+      const r = await s3.send(new ListObjectsV2Command({ Bucket: trail.bucket, Prefix: prefix, ContinuationToken: token }));
+      for (const o of (r.Contents || []).sort((a, b) => a.LastModified - b.LastModified)) {
+        if (!/\.json(\.gz)?$/.test(o.Key)) continue;
+        if (ctx.cancelled) throw Object.assign(new Error('Cancelled'), { cancelled: true });
+        if (files >= MAX_S3_OBJECTS * 5) { ctx.truncated = true; return files; }
+        const got = await s3.send(new GetObjectCommand({ Bucket: trail.bucket, Key: o.Key }));
+        const raw = Buffer.from(await got.Body.transformToByteArray());
+        const doc = JSON.parse((/\.gz$/.test(o.Key) ? zlib.gunzipSync(raw) : raw).toString('utf8'));
+        files += 1;
+        for (const rec of doc.Records || []) {
+          const t = Date.parse(rec.eventTime);
+          if (t >= win.start && t <= win.end) { if (!(await sink.write(JSON.stringify(rec) + '\n'))) return files; }
+        }
+        ctx.progress(`CloudTrail ${region}: read ${files} log files`);
+      }
+      token = r.NextContinuationToken;
+    } while (token);
+  }
+  return files;
+}
+
+async function fetchCloudTrail(client, credentials, sel, win, sink, ctx) {
+  const regions = [...new Set((sel || []).map((k) => String(k).split('|')[0]))];
+  if (!regions.length) throw new Error('Choose the region to fetch CloudTrail logs for');
+  for (const region of regions) {
+    const ct = new CloudTrailClient({ region, credentials, maxAttempts: 8 });
+    let trails = [];
+    try { trails = ((await ct.send(new DescribeTrailsCommand({ includeShadowTrails: true }))).trailList || []).filter((t) => t.S3BucketName).map((t) => ({ name: t.Name, bucket: t.S3BucketName, prefix: t.S3KeyPrefix || '' })); } catch { /* fall back to event history */ }
+    // 1) the trail's own log files in S3: complete, includes data events when the trail records them
+    let served = false;
+    for (const t of trails) {
+      try {
+        await sink.write(`# --- CloudTrail ${region}: trail ${t.name} (S3 bucket ${t.bucket}) ---\n`);
+        const n = await cloudTrailFromS3(t, region, credentials, client.accountId, win, sink, ctx);
+        if (n > 0) { served = true; break; }
+      } catch (e) { if (e.cancelled) throw e; await sink.write(`# trail ${t.name}: S3 logs not readable (${errMsg(e)}), using event history instead\n`); }
+    }
+    if (served) continue;
+    // 2) CloudTrail event history: management events of the last 90 days, in any region, no trail needed
+    await sink.write(`# --- CloudTrail ${region}: event history (management events) ---\n`);
+    let events = 0; let token;
     do {
       const r = await ct.send(new LookupEventsCommand({ StartTime: new Date(win.start), EndTime: new Date(win.end), MaxResults: 50, NextToken: token }));
       for (const e of r.Events || []) { events += 1; if (events > MAX_CT_EVENTS) { ctx.truncated = true; return; } if (!(await sink.write((e.CloudTrailEvent || JSON.stringify({ EventId: e.EventId, EventName: e.EventName })) + '\n'))) return; }
