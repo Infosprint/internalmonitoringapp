@@ -8,6 +8,8 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const DATA_DIR = path.join(ROOT, 'data');
 const FILE = path.join(DATA_DIR, 'clients.json');
 
+const PARTNER_TYPES = ['general', 'amc', 'billing'];
+
 function ensure() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(FILE)) fs.writeFileSync(FILE, JSON.stringify({ clients: [] }, null, 2));
@@ -58,6 +60,7 @@ function normalize(input, existing) {
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     lastScan: existing?.lastScan || null,
+    partnerType: PARTNER_TYPES.includes(existing?.partnerType) ? existing.partnerType : 'general',
   };
 }
 
@@ -92,6 +95,16 @@ const store = {
     if (next.length === clients.length) throw Object.assign(new Error('Client not found'), { status: 404 });
     writeAll(next);
   },
+  setPartnerType(id, partnerType) {
+    if (!PARTNER_TYPES.includes(partnerType)) throw new Error('Partner type must be general, amc or billing');
+    const clients = readAll();
+    const c = clients.find((x) => x.id === id);
+    if (!c) throw Object.assign(new Error('Client not found'), { status: 404 });
+    c.partnerType = partnerType;
+    c.updatedAt = new Date().toISOString();
+    writeAll(clients);
+    return c;
+  },
   setLastScan(id, lastScan) {
     const clients = readAll();
     const c = clients.find((x) => x.id === id);
@@ -99,6 +112,7 @@ const store = {
     c.lastScan = lastScan;
     writeAll(clients);
   },
+  PARTNER_TYPES,
   paths: { ROOT, DATA_DIR, FILE, REPORTS_DIR: path.join(ROOT, 'reports') },
 };
 

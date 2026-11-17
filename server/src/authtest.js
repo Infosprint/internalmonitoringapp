@@ -50,6 +50,10 @@ const rejects = async (p, re, msg) => { try { await p; } catch (e) { assert(re.t
   const tok = auth.createSession(emp.id);
   assert(auth.getSession(tok));
   assert(!auth.getSession('made-up-token'));
+  const typed = await auth.resetPassword(emp.id, 'BrandNewPass99');
+  assert(!('temporaryPassword' in typed), 'a typed password is not echoed back');
+  const gen = await auth.resetPassword(emp.id);
+  assert.strictEqual(gen.temporaryPassword.length, 16);
   await auth.resetPassword(emp.id, 'BrandNewPass99');
   assert(!auth.getSession(tok), 'reset ends existing sessions');
   await rejects(auth.login('emp@infosprint.com', 'EmployeePass1', '4.4.4.4'), /Invalid/, 'old password no longer works');
@@ -121,10 +125,23 @@ const rejects = async (p, re, msg) => { try { await p; } catch (e) { assert(re.t
     assert.strictEqual((await call('POST', `/api/users/${add.data.id}/reset-password`, { password: 'LongEnough123' }, empCookie)).res.status, 403);
 
     // admin resets the employee's password: their session dies, new password works
-    const reset = await call('POST', `/api/users/${add.data.id}/reset-password`, { password: 'ResetPassword77' }, cookie);
+    // one-click reset: no password typed, the server generates one and returns it once
+    const reset = await call('POST', `/api/users/${add.data.id}/reset-password`, {}, cookie);
     assert.strictEqual(reset.res.status, 200);
+    const temp = reset.data.temporaryPassword;
+    assert(typeof temp === 'string' && temp.length >= 16, 'temporary password returned');
+    assert(!JSON.stringify(reset.data.user).includes('passwordHash'));
     assert.strictEqual((await call('GET', '/api/auth/me', null, empCookie)).res.status, 401, 'old session ended');
-    assert.strictEqual((await call('POST', '/api/auth/login', { email: 'hire@infosprint.com', password: 'ResetPassword77' })).res.status, 200);
+    assert.strictEqual((await call('POST', '/api/auth/login', { email: 'hire@infosprint.com', password: 'HirePassword1' })).res.status, 401, 'old password dead');
+    assert.strictEqual((await call('POST', '/api/auth/login', { email: 'hire@infosprint.com', password: temp })).res.status, 200, 'temporary password works');
+    // an admin can reset another admin the same way
+    const a2 = await call('POST', '/api/users', { name: 'Second Admin', email: 'second@infosprint.com', password: 'SecondAdmin123', role: 'admin' }, cookie);
+    const r2 = await call('POST', `/api/users/${a2.data.id}/reset-password`, {}, cookie);
+    assert.strictEqual(r2.res.status, 200);
+    assert.strictEqual((await call('POST', '/api/auth/login', { email: 'second@infosprint.com', password: r2.data.temporaryPassword })).res.status, 200, 'reset admin signs in with temporary password');
+    // two generated passwords differ
+    const r3 = await call('POST', `/api/users/${a2.data.id}/reset-password`, {}, cookie);
+    assert.notStrictEqual(r3.data.temporaryPassword, r2.data.temporaryPassword);
 
     // logout
     assert.strictEqual((await call('POST', '/api/auth/logout', null, cookie)).res.status, 204);

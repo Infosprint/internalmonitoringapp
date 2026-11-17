@@ -6,3 +6,5 @@ data/users.json
 data/*.tmp
 .env
 *.pem
+exports/
+data/audit.log

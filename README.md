@@ -32,6 +32,16 @@ The console requires a sign-in (email + password). Users are stored in `data/use
 - Behind nginx/HTTPS the proxy must send `X-Forwarded-Proto` and `X-Forwarded-For` (see the nginx block in the deployment notes) so the session cookie gets the `Secure` flag and rate limiting sees real client IPs. Set `COOKIE_SECURE=1` to force the flag.
 - Tests: `npm test --prefix server` (report logic + sign-in/user rules + an HTTP run against the real app).
 
+## Partner types, AMC details and logs
+
+Each client has a partner type, set from the **General** tab of the client list (General / AMC partner / Billing partner).
+
+- **Billing partner and General**: the standard scan only.
+- **AMC partner**: the standard scan plus, per server: instance list, 8-day hourly CPU and RAM charts, EBS volumes with provisioned and (when the CloudWatch agent reports it) used/free space, load balancer / target group / Auto Scaling health, and whether VPC flow logs, load balancer logs and CloudTrail are enabled. The client page shows the same data in the console; it is also added to the HTML and Word reports.
+- RAM and in-guest disk usage exist in CloudWatch only when the CloudWatch agent runs on the server. The scan checks SSM agent status and, when RAM metrics are missing, recommends installing the agent. The role stays read-only; nothing is run on the servers.
+- **Logs page** (AMC clients, button "Logs"): tabs for VPC, CloudTrail, Load balancer and CloudFront. VPCs without flow logs are listed but cannot be fetched. Choose log types and a duration (1 hour, 24 hours, 1 week, 15 days, 30 days); one type gives one file, several types give one file each in a zip. Logs are read from the S3 buckets or CloudWatch Logs the client already uses (CloudTrail uses event history), capped at 300 MB per file and 3000 S3 objects (change with `LOG_MAX_BYTES`, `LOG_MAX_OBJECTS`). Exports live in `exports/` and are deleted after 24 hours; fetches and downloads are written to `data/audit.log`.
+- Existing client roles need the extra read actions in `cloudformation/infosprint-readonly-role.yaml` unless they use the full ReadOnlyAccess managed policy (update the stack if the role was created from an older template).
+
 ## Run it (Windows PowerShell, in this project folder)
 
 Prerequisites: Node.js 18+ and AWS credentials on the machine running the app (this is the identity that calls `sts:AssumeRole` into each client role – e.g. `aws configure`, `aws sso login`, or `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` env vars).

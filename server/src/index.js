@@ -60,7 +60,55 @@ app.delete('/api/users/:id', auth.requireAdmin, wrap((req, res) => { auth.remove
 app.get('/api/clients', wrap((req, res) => res.json(store.list())));
 app.post('/api/clients', wrap((req, res) => res.status(201).json(store.create(req.body || {}))));
 app.put('/api/clients/:id', wrap((req, res) => res.json(store.update(req.params.id, req.body || {}))));
+app.put('/api/clients/:id/partner', wrap((req, res) => res.json(store.setPartnerType(req.params.id, (req.body || {}).partnerType))));
 app.delete('/api/clients/:id', wrap((req, res) => { store.remove(req.params.id); res.status(204).end(); }));
+
+/* AMC console data and logs (AMC partners only) */
+const logs = require('./logs');
+const amcClient = (id) => {
+  const c = store.get(id);
+  if (!c) throw Object.assign(new Error('Client not found'), { status: 404 });
+  if (c.partnerType !== 'amc') throw Object.assign(new Error('This account is not an AMC partner'), { status: 400 });
+  return c;
+};
+app.get('/api/clients/:id/amc', wrap((req, res) => {
+  const c = amcClient(req.params.id);
+  const ls = c.lastScan;
+  if (!ls || !ls.folder) return res.json({ amc: null, message: 'No scan yet. Run a scan to collect server details.' });
+  const p = reports.reportPath(ls.folder, ls.file, 'json');
+  if (!p) return res.json({ amc: null, message: 'The latest report file was not found.' });
+  const r = JSON.parse(fs.readFileSync(p, 'utf8'));
+  res.json({ amc: r.amc || null, scannedAt: r.scan.finishedAt, message: r.amc ? '' : 'The latest scan ran before this account was marked as AMC partner. Run a new scan.' });
+}));
+app.get('/api/clients/:id/logs/sources', awrap(async (req, res) => {
+  const c = amcClient(req.params.id);
+  res.json(await logs.listSources(c));
+}));
+app.post('/api/clients/:id/logs/fetch', wrap((req, res) => {
+  const c = amcClient(req.params.id);
+  res.status(202).json(logs.publicJob(logs.createJob({ client: c, user: req.user, request: req.body || {} })));
+}));
+app.get('/api/clients/:id/logs/jobs/:job', wrap((req, res) => {
+  amcClient(req.params.id);
+  const j = logs.getJob(req.params.job, req.params.id);
+  if (!j) throw Object.assign(new Error('Job not found (exports are kept for 24 hours)'), { status: 404 });
+  res.json(logs.publicJob(j));
+}));
+app.post('/api/clients/:id/logs/jobs/:job/cancel', wrap((req, res) => {
+  amcClient(req.params.id);
+  const j = logs.getJob(req.params.job, req.params.id);
+  if (!j) throw Object.assign(new Error('Job not found'), { status: 404 });
+  j.cancelled = true;
+  res.json(logs.publicJob(j));
+}));
+app.get('/api/clients/:id/logs/jobs/:job/download', wrap((req, res) => {
+  const c = amcClient(req.params.id);
+  const j = logs.getJob(req.params.job, req.params.id);
+  const p = logs.downloadPath(j);
+  if (!p || !fs.existsSync(p)) throw Object.assign(new Error('Export not ready or expired'), { status: 404 });
+  logs.audit({ event: 'download', user: req.user.email, client: c.clientName, jobId: j.id, file: j.download });
+  res.download(p, j.download);
+}));
 
 /* scanning */
 app.post('/api/scan/all', wrap((req, res) => {

@@ -8,6 +8,11 @@ const {
   NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs,
 } = require('./guidance');
 
+const { cpuChart, memChart } = require('./charts');
+let Resvg = null;
+try { ({ Resvg } = require('@resvg/resvg-js')); } catch { Resvg = null; } // charts are skipped when the renderer is unavailable
+const { ImageRun } = require('docx');
+
 const SEV_COLOR = { CRITICAL: '7F1D1D', HIGH: 'D93025', MEDIUM: 'B06A00', LOW: '1A73E8', INFORMATIONAL: '52606D' };
 const STATUS = {
   ENABLED: ['Enabled', '116530'], NOT_ENABLED: ['Not enabled', 'A31515'], PARTIAL: ['Partial', '8A5A00'], ERROR: ['Check failed', '8A5A00'],
@@ -143,6 +148,47 @@ function networkSection(r) {
   return out;
 }
 
+function chartImage(svg) {
+  if (!Resvg || !svg) return null;
+  try {
+    const png = new Resvg(svg.replace('width="100%"', 'width="520"'), { fitTo: { mode: 'width', value: 1040 }, font: { loadSystemFonts: true } }).render().asPng();
+    return new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 440, height: 145 } })], spacing: { after: 80 } });
+  } catch { return null; }
+}
+
+function amcSection(r, num) {
+  const a = r.amc;
+  const out = [h1(`${num}. AMC server details`)];
+  if (a.failed) { out.push(para('The AMC checks could not be completed. See the scan warnings.')); return out; }
+  const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer', UNKNOWN: 'Unknown' }[s] || s);
+  out.push(para(`Metrics cover ${a.period.days} days at hourly resolution. RAM and disk usage need the CloudWatch agent on the server.`));
+  if (!a.instances.length) { out.push(para('No servers found.')); return out; }
+  out.push(table(['Server', 'Region', 'State', 'CPU avg / peak', 'RAM avg / peak', 'EBS volumes', 'Provisioned', 'Used / free', 'SSM agent', 'VPC flow logs', 'LB logs', 'CloudTrail'],
+    a.instances.map((i) => [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state,
+      i.cpu ? `${i.cpu.average}% / ${i.cpu.peak}%` : '—', i.memory ? `${i.memory.average}% / ${i.memory.peak}%` : 'Not reported',
+      String(i.storage.volumes.length), `${i.storage.provisionedGiB} GiB`, i.storage.usedGiB !== null ? `${i.storage.usedGiB} / ${i.storage.freeGiB} GiB` : 'Not reported',
+      i.ssm.status.replace('_', ' ').toLowerCase(), lg(i.logging.vpcFlowLogs), lg(i.logging.loadBalancerLogs), lg(i.logging.cloudtrail)]),
+    [2400, 1000, 900, 1300, 1300, 800, 1000, 1400, 1200, 1200, 1100, 1238]));
+  out.push(h2(`${num}.1 Load balancer, target group and Auto Scaling health`));
+  const hrows = a.instances.flatMap((i) => i.health.map((h) => [i.instanceId, h.kind === 'asg' ? 'Auto Scaling' : h.kind === 'classic' ? 'Classic LB' : 'Target group', [h.lb, h.group].filter(Boolean).join(' / '), h.state || 'unknown', h.reason || h.description || '']));
+  out.push(hrows.length ? table(['Server', 'Type', 'Load balancer / group', 'State', 'Reason'], hrows, [2400, 1600, 4200, 1400, 5238]) : para('No server is attached to a load balancer or Auto Scaling group.'));
+  out.push(h2(`${num}.2 Recommendations`));
+  const recs = a.instances.flatMap((i) => i.recommendations.map((x) => [i.name || i.instanceId, x]));
+  out.push(recs.length ? table(['Server', 'Recommendation'], recs, [3000, 11838]) : para([run('No monitoring gaps found.', { bold: true, color: '116530' })]));
+  out.push(h2(`${num}.3 CPU and RAM, last 8 days`));
+  let drawn = false;
+  for (const i of a.instances.filter((x) => x.state === 'running').slice(0, 25)) {
+    const c = chartImage(cpuChart(i, a.period)); const m = chartImage(memChart(i, a.period));
+    if (!c && !m) continue;
+    drawn = true;
+    out.push(para([run(`${i.name || ''} ${i.instanceId}`.trim(), { bold: true })]));
+    if (c) out.push(c);
+    if (m) out.push(m);
+  }
+  if (!drawn) out.push(para('Charts are available in the console report; the table above lists the average and peak values.'));
+  return out;
+}
+
 async function buildDocx(r) {
   const s = r.summary;
   const sc = s.securityFindings;
@@ -200,6 +246,8 @@ async function buildDocx(r) {
       body.push(...findingsTable(list));
     }
   });
+
+  if (r.amc) body.push(...amcSection(r, SERVICES.length + 3));
 
   /* Appendix */
   body.push(h1('Appendix: security services by region'));

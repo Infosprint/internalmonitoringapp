@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from './api.js';
+import { AmcOverview, LogsPage } from './Amc.jsx';
 
 const EMPTY = { clientName: '', accountId: '', roleArn: '', externalId: '' };
 
@@ -38,8 +39,18 @@ function Sev({ s }) {
 const fmt = (d) => new Date(d).toLocaleString();
 
 /* ---------- page 1: clients ---------- */
-function Dashboard({ clients, job, busy, scan, remove }) {
+const PARTNER_TABS = [['general', 'General'], ['amc', 'AMC partner'], ['billing', 'Billing partner']];
+
+function Dashboard({ clients, job, busy, scan, remove, refresh, setError }) {
+  const [tab, setTab] = useState(() => window.sessionStorage?.getItem('partnerTab') || 'general');
+  const pick = (t) => { setTab(t); try { window.sessionStorage.setItem('partnerTab', t); } catch { /* ignore */ } };
   const itemFor = (id) => job?.items.find((i) => i.clientId === id);
+  const typeOf = (c) => c.partnerType || 'general';
+  const shown = tab === 'general' ? clients : clients.filter((c) => typeOf(c) === tab);
+  const count = (t) => (t === 'general' ? clients.length : clients.filter((c) => typeOf(c) === t).length);
+  async function setPartner(c, type) {
+    try { await api.setPartner(c.id, type); await refresh(); } catch (e) { setError(e.message); }
+  }
   return (
     <>
       <header>
@@ -56,19 +67,26 @@ function Dashboard({ clients, job, busy, scan, remove }) {
       </header>
 
       <section className="card">
-        <h2>Clients</h2>
-        {!clients.length ? <p className="muted">No clients yet. Click “Add client”.</p> : (
+        <div className="tabs">{PARTNER_TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => pick(t)}>{n} ({count(t)})</button>)}</div>
+        {tab === 'general' && <p className="muted">All onboarded accounts. Move an account to AMC partner (adds server metrics, health and log fetching to the scan) or Billing partner (standard scan).</p>}
+        {tab === 'amc' && <p className="muted">AMC partners get the standard scan plus server inventory, 8-day CPU/RAM, storage, load balancer health and a Logs page.</p>}
+        {tab === 'billing' && <p className="muted">Billing partners get the standard scan.</p>}
+        {!shown.length ? <p className="muted">{tab === 'general' ? 'No clients yet. Click “Add client”.' : 'No accounts in this tab yet. Move one from the General tab.'}</p> : (
           <table>
-            <thead><tr><th>Client</th><th>Account</th><th>Role</th><th>Last scan</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Client</th><th>Account</th><th>Partner</th><th>Last scan</th><th>Status</th><th /></tr></thead>
             <tbody>
-              {clients.map((c) => {
+              {shown.map((c) => {
                 const it = itemFor(c.id);
                 const ls = c.lastScan;
                 return (
                   <tr key={c.id} className="clickable" onClick={() => go(`/client/${c.id}`)}>
                     <td><a className="client-link" href={`#/client/${c.id}`} onClick={(e) => e.stopPropagation()}><b>{c.clientName}</b></a></td>
                     <td>{c.accountId}</td>
-                    <td className="role" title={c.roleArn}>{c.roleArn.split('/').slice(1).join('/')}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <select value={typeOf(c)} aria-label={`Partner type of ${c.clientName}`} onChange={(e) => setPartner(c, e.target.value)}>
+                        <option value="general">General</option><option value="amc">AMC partner</option><option value="billing">Billing partner</option>
+                      </select>
+                    </td>
                     <td>{ls ? fmt(ls.at) : <span className="muted">never</span>}</td>
                     <td>
                       {it && it.status !== 'done' && it.status !== 'failed' ? <span className="pill run">{it.status}: {it.message}</span>
@@ -78,6 +96,7 @@ function Dashboard({ clients, job, busy, scan, remove }) {
                     <td className="row-actions" onClick={(e) => e.stopPropagation()}>
                       <button className="primary" disabled={busy} onClick={() => scan(c.id)}>Scan</button>
                       <button onClick={() => go(`/client/${c.id}`)}>Reports</button>
+                      {typeOf(c) === 'amc' && <button onClick={() => go(`/client/${c.id}/logs`)}>Logs</button>}
                       <button onClick={() => go(`/clients/${c.id}/edit`)}>Edit</button>
                       <button className="danger" onClick={() => remove(c)}>Delete</button>
                     </td>
@@ -107,9 +126,10 @@ function ClientPage({ id, clients, reports, job, busy, scan }) {
         <BackButton fallback="/" />
         <div className="grow">
           <h1>{c.clientName}</h1>
-          <p className="muted">Account {c.accountId} · <span title={c.roleArn}>{c.roleArn.split('/').slice(1).join('/')}</span></p>
+          <p className="muted">Account {c.accountId} · {({ amc: 'AMC partner', billing: 'Billing partner' })[c.partnerType] || 'General'} · <span title={c.roleArn}>{c.roleArn.split('/').slice(1).join('/')}</span></p>
         </div>
         <div className="row-actions">
+          {c.partnerType === 'amc' && <button onClick={() => go(`/client/${c.id}/logs`)}>Logs</button>}
           <button onClick={() => go(`/clients/${c.id}/edit`)}>Edit client</button>
           <button className="primary" disabled={busy} onClick={() => scan(c.id)}>{running ? 'Scanning…' : 'Run scan'}</button>
         </div>
@@ -117,6 +137,8 @@ function ClientPage({ id, clients, reports, job, busy, scan }) {
 
       {running && <div className="notice">Scan {it.status}: {it.message}</div>}
       {!running && ls?.status === 'FAILED' && <div className="error">Last scan failed: {ls.error}</div>}
+
+      {c.partnerType === 'amc' && <AmcOverview clientId={c.id} />}
 
       <section className="card">
         <h2>Reports ({mine.length})</h2>
@@ -305,7 +327,7 @@ function UsersPage({ me }) {
   const [notice, setNotice] = useState('');
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'user' });
   const [editing, setEditing] = useState(null);   // { id, name, email, role }
-  const [resetting, setResetting] = useState(null); // { id, password }
+  const [temp, setTemp] = useState(null);       // { name, password } shown once after a reset
 
   const load = useCallback(async () => { setUsers(await api.users()); }, []);
   useEffect(() => { load().catch((e) => setError(e.message)); }, [load]);
@@ -324,11 +346,12 @@ function UsersPage({ me }) {
     e.preventDefault();
     if (await run(() => api.updateUser(editing.id, { name: editing.name, email: editing.email, role: editing.role }), 'User updated.')) setEditing(null);
   }
-  async function saveReset(e, u) {
-    e.preventDefault();
-    const pw = resetting.password;
-    if (await run(() => api.resetPassword(u.id, pw), `Password reset for ${u.name}. Share the new password with them securely: ${pw}`)) setResetting(null);
+  async function reset(u) {
+    if (!window.confirm(`Reset the password for ${u.name} (${u.email})? They will be signed out and need the new password.`)) return;
+    setError(''); setNotice(''); setTemp(null);
+    try { const r = await api.resetPassword(u.id); setTemp({ name: u.name, password: r.temporaryPassword }); await load(); } catch (err) { setError(err.message); }
   }
+  const copyTemp = () => navigator.clipboard?.writeText(temp.password).then(() => setNotice('Password copied.')).catch(() => {});
   const toggle = (u) => run(() => api.updateUser(u.id, { disabled: !u.disabled }), `${u.name} ${u.disabled ? 'enabled' : 'disabled'}.`);
   const remove = (u) => { if (window.confirm(`Delete ${u.name} (${u.email})? This cannot be undone.`)) run(() => api.deleteUser(u.id), `${u.name} deleted.`); };
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -338,6 +361,14 @@ function UsersPage({ me }) {
       <div className="topbar"><BackButton /><h1>Users</h1></div>
       {error && <div className="error" onClick={() => setError('')}>{error}</div>}
       {notice && <div className="notice" onClick={() => setNotice('')}>{notice}</div>}
+      {temp && (
+        <div className="temp">
+          <div>New password for <b>{temp.name}</b> (shown only once, share it securely):</div>
+          <code>{temp.password}</code>
+          <button onClick={copyTemp}>Copy</button>
+          <button onClick={() => setTemp(null)}>Done</button>
+        </div>
+      )}
 
       <section className="card">
         <h2>Add employee</h2>
@@ -377,8 +408,8 @@ function UsersPage({ me }) {
                         <><button className="primary" onClick={saveEdit}>Save</button><button onClick={() => setEditing(null)}>Cancel</button></>
                       ) : (
                         <>
-                          <button onClick={() => { setResetting(null); setEditing({ id: u.id, name: u.name, email: u.email, role: u.role }); }}>Edit</button>
-                          <button onClick={() => { setEditing(null); setResetting({ id: u.id, password: '' }); }}>Reset password</button>
+                          <button onClick={() => { setEditing({ id: u.id, name: u.name, email: u.email, role: u.role }); }}>Edit</button>
+                          {u.id !== me.id && <button onClick={() => reset(u)}>Reset password</button>}
                           {u.id !== me.id && <button onClick={() => toggle(u)}>{u.disabled ? 'Enable' : 'Disable'}</button>}
                           {u.id !== me.id && <button className="danger" onClick={() => remove(u)}>Delete</button>}
                         </>
@@ -386,15 +417,6 @@ function UsersPage({ me }) {
                     </div>
                   </td>
                 </tr>
-                {resetting?.id === u.id && (
-                  <tr><td colSpan="6">
-                    <form className="reset" onSubmit={(e) => saveReset(e, u)} autoComplete="off">
-                      <PasswordField label={`New password for ${u.name}`} value={resetting.password} onChange={(v) => setResetting({ ...resetting, password: v })} generate />
-                      <button className="primary" type="submit">Set password</button>
-                      <button type="button" onClick={() => setResetting(null)}>Cancel</button>
-                    </form>
-                  </td></tr>
-                )}
               </React.Fragment>
             ))}
           </tbody>
@@ -465,8 +487,9 @@ function Console({ user, onSignOut }) {
   else if (parts[0] === 'clients' && parts[1] === 'new') page = <ClientFormPage key="new" id="new" clients={clients} refresh={refresh} />;
   else if (parts[0] === 'clients' && parts[1] && parts[2] === 'edit') page = <ClientFormPage key={parts[1]} id={parts[1]} clients={clients} refresh={refresh} />;
   else if (parts[0] === 'client' && parts[1] && parts[2] === 'report' && parts[3] && parts[4]) page = <ReportViewPage clientId={parts[1]} folder={parts[3]} file={parts[4]} reports={reports} clients={clients} />;
+  else if (parts[0] === 'client' && parts[1] && parts[2] === 'logs') page = clients.find((x) => x.id === parts[1])?.partnerType === 'amc' ? <LogsPage key={parts[1]} client={clients.find((x) => x.id === parts[1])} BackButton={BackButton} /> : <p className="muted">Logs are available for AMC partners only.</p>;
   else if (parts[0] === 'client' && parts[1]) page = <ClientPage id={parts[1]} clients={clients} reports={reports} job={job} busy={busy} scan={scan} />;
-  else page = <Dashboard clients={clients} job={job} busy={busy} scan={scan} remove={remove} />;
+  else page = <Dashboard clients={clients} job={job} busy={busy} scan={scan} remove={remove} refresh={refresh} setError={setError} />;
 
   return (
     <div className="wrap">

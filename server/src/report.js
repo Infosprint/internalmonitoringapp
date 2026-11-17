@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { paths } = require('./store');
+const { renderAmcSection } = require('./amc-render');
 const { NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs } = require('./guidance');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -161,6 +162,7 @@ ${s.securityFindings ? `<div class="c"><div class="n">${s.securityFindings.total
 ${renderBackupSection(r)}
 ${renderNetworkSection(r)}
 ${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 3)).join('')}
+${r.amc ? renderAmcSection(r, SERVICES.length + 3) : ''}
 <h2>Appendix: security services by region (regions with EC2 instances)</h2>
 <table><tr><th>Region</th><th>Instances</th><th>GuardDuty</th><th>Inspector</th><th>Security Hub</th></tr>${regionRowsOrdered || '<tr><td colspan="5">No EC2 instances found.</td></tr>'}</table>
 ${warnings}

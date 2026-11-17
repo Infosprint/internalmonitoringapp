@@ -11,70 +11,13 @@ const { BackupClient, ListProtectedResourcesCommand } = require('@aws-sdk/client
 const { collectFindings, groupFindings } = require('./findings');
 const { scanNetworkRegion, scanCloudFront } = require('./network');
 const { AMI_RECOMMENDATION, AMI_WHY } = require('./guidance');
+const { scanAmc } = require('./amc');
 const { DLMClient, GetLifecyclePoliciesCommand, GetLifecyclePolicyCommand } = require('@aws-sdk/client-dlm');
 
-const MAX_ATTEMPTS = 6;
+const { MAX_ATTEMPTS, mapLimit, collect, errMsg, tagMap, chunk, createCredentialProvider, listRegions } = require('./aws');
 const REGION_CONCURRENCY = 4;
 
-/* ---------- small helpers ---------- */
-
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-async function collect(client, makeCommand, pick) {
-  const out = [];
-  let token;
-  do {
-    const res = await client.send(makeCommand(token));
-    out.push(...(pick(res) || []));
-    token = res.NextToken;
-  } while (token);
-  return out;
-}
-
-const errMsg = (e) => `${e.name || 'Error'}: ${e.message || e}`;
-const tagMap = (tags) => Object.fromEntries((tags || []).map((t) => [t.Key, t.Value]));
-const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 const maxDate = (a, b) => (!a ? b : !b ? a : new Date(a) > new Date(b) ? a : b);
-
-/* ---------- credentials: assume the client's read-only role ---------- */
-
-function createCredentialProvider(client) {
-  const sts = new STSClient({ region: 'us-east-1', maxAttempts: MAX_ATTEMPTS });
-  let cached = null;
-  let inflight = null;
-  const refresh = async () => {
-    const res = await sts.send(new AssumeRoleCommand({
-      RoleArn: client.roleArn,
-      RoleSessionName: 'infosprint-monitoring-scan',
-      DurationSeconds: 3600,
-      ExternalId: client.externalId || undefined,
-    }));
-    const c = res.Credentials;
-    cached = {
-      accessKeyId: c.AccessKeyId,
-      secretAccessKey: c.SecretAccessKey,
-      sessionToken: c.SessionToken,
-      expiration: new Date(c.Expiration),
-    };
-    return cached;
-  };
-  return async () => {
-    if (cached && cached.expiration.getTime() - Date.now() > 5 * 60 * 1000) return cached;
-    if (!inflight) inflight = refresh().finally(() => { inflight = null; });
-    return inflight;
-  };
-}
 
 /* ---------- security service checks (per region) ---------- */
 
@@ -447,17 +390,7 @@ async function scanClient(client, onProgress = () => {}) {
     throw new Error(`Assumed role belongs to account ${identity.Account}, expected ${client.accountId}`);
   }
 
-  let regions = null;
-  let lastErr;
-  for (const home of ['us-east-1', 'ap-south-1', 'eu-west-1']) {
-    try {
-      const ec2 = new EC2Client({ region: home, credentials, maxAttempts: MAX_ATTEMPTS });
-      const res = await ec2.send(new DescribeRegionsCommand({ AllRegions: false }));
-      regions = res.Regions.map((r) => r.RegionName).sort();
-      break;
-    } catch (e) { lastErr = e; }
-  }
-  if (!regions) throw new Error(`Could not list regions: ${errMsg(lastErr)}`);
+  const regions = await listRegions(credentials);
 
   onProgress(`Scanning ${regions.length} regions`);
   let done = 0;
@@ -478,6 +411,14 @@ async function scanClient(client, onProgress = () => {}) {
   onProgress('Checking CloudFront distributions');
   const cloudfront = await scanCloudFront(credentials).catch((e) => ({ items: [], total: 0, errors: [`CloudFront: ${errMsg(e)}`] }));
   const network = buildNetwork(networkResults, cloudfront);
+
+  // AMC partners get extra detail: server inventory, 8-day CPU/RAM, EBS, load balancer / ASG health, logging status
+  let amc = null;
+  if (client.partnerType === 'amc') {
+    onProgress('AMC partner: collecting server details and 8-day metrics');
+    amc = await scanAmc({ credentials, regions: regionResults.filter((r) => r.instanceCount > 0).map((r) => r.region), onProgress })
+      .catch((e) => ({ failed: true, warnings: [`AMC checks failed: ${errMsg(e)}`], instances: [], summary: null }));
+  }
 
   const findings = buildFindings(regionResults);
 
@@ -500,10 +441,11 @@ async function scanClient(client, onProgress = () => {}) {
   const instances = regionResults.flatMap((r) => r.instances);
   regionResults.forEach((r) => { delete r.securityFindings; });
   const sev = (s) => findings.filter((f) => f.severity === s).length;
-  const warnings = [...buildWarnings(regionResults), ...network.warnings];
+  const warnings = [...buildWarnings(regionResults), ...network.warnings, ...(amc?.warnings || [])];
+  if (amc) delete amc.warnings;
   delete network.warnings;
   return {
-    client: { id: client.id, name: client.clientName, accountId: client.accountId, roleArn: client.roleArn },
+    client: { id: client.id, name: client.clientName, accountId: client.accountId, roleArn: client.roleArn, partnerType: client.partnerType || 'general' },
     scan: { startedAt: startedAt.toISOString(), finishedAt: new Date().toISOString() },
     summary: {
       regionsScanned: regions.length,
@@ -513,6 +455,7 @@ async function scanClient(client, onProgress = () => {}) {
       instancesWithoutBackup: instances.filter((i) => i.backup.status === 'NONE').length,
       findings: { total: findings.length, high: sev('HIGH'), medium: sev('MEDIUM'), low: sev('LOW') },
       network: network.summary,
+      ...(amc && amc.summary ? { amc: amc.summary } : {}),
       securityFindings: {
         total: grouped.length, totalOccurrences: all.length,
         guardduty: securityFindings.guardduty.length, securityhub: securityFindings.securityhub.length, inspector: securityFindings.inspector.length,
@@ -527,6 +470,7 @@ async function scanClient(client, onProgress = () => {}) {
     regions: regionResults.filter((r) => r.instanceCount > 0 || r.error),
     findings,
     network,
+    ...(amc ? { amc } : {}),
     securityFindings,
     warnings,
   };

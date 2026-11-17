@@ -117,17 +117,26 @@ function updateUser(id, patch, actingId) {
   return publicUser(next);
 }
 
+// Random temporary password (no look-alike characters). randomInt avoids modulo bias.
+function generatePassword(length = 16) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  return Array.from({ length }, () => chars[crypto.randomInt(chars.length)]).join('');
+}
+
+// With no password given, a temporary one is generated and returned once (never stored in plain text).
 async function resetPassword(id, password) {
   const users = readAll();
   const u = users.find((x) => x.id === id);
   if (!u) throw fail('User not found', 404);
-  validatePassword(password, u.email);
-  u.passwordHash = await hashPassword(password);
+  const generated = password === undefined || password === null || password === '';
+  const pw = generated ? generatePassword() : password;
+  validatePassword(pw, u.email);
+  u.passwordHash = await hashPassword(pw);
   u.updatedAt = new Date().toISOString();
   writeAll(users);
   revokeUser(id); // the old password's sessions end immediately
   failures.clear();
-  return publicUser(u);
+  return { user: publicUser(u), ...(generated ? { temporaryPassword: pw } : {}) };
 }
 
 async function changeOwnPassword(id, current, next) {
@@ -272,7 +281,7 @@ const setSessionCookie = (req, res, token) => res.cookie(COOKIE, token, cookieOp
 const clearSessionCookie = (req, res) => res.clearCookie(COOKIE, cookieOptions(req));
 
 module.exports = {
-  MIN_PW, list, count, createUser, updateUser, resetPassword, changeOwnPassword, removeUser, upsertAdmin,
+  MIN_PW, generatePassword, list, count, createUser, updateUser, resetPassword, changeOwnPassword, removeUser, upsertAdmin,
   login, createSession, getSession, destroySession, revokeUser, hashPassword, verifyPassword, validatePassword,
   attach, requireAuth, requireAdmin, sameOrigin, setSessionCookie, clearSessionCookie, cookieValue, COOKIE,
 };

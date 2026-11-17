@@ -92,6 +92,22 @@ Resources:
                   - backup:ListProtectedResources
                   - dlm:GetLifecyclePolicies
                   - dlm:GetLifecyclePolicy
+                  # AMC partner checks and log export (read only)
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:ListMetrics
+                  - ssm:DescribeInstanceInformation
+                  - autoscaling:DescribeAutoScalingGroups
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeTargetHealth
+                  - elasticloadbalancing:DescribeInstanceHealth
+                  - cloudtrail:DescribeTrails
+                  - cloudtrail:GetTrailStatus
+                  - cloudtrail:LookupEvents
+                  - logs:FilterLogEvents
+                  - logs:DescribeLogGroups
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:GetBucketLocation
                 Resource: '*'
       Tags:
         - Key: Purpose
