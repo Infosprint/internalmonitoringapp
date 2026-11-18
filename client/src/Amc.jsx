@@ -25,6 +25,9 @@ function LineChart({ series, startMs, title }) {
   );
 }
 
+const ramHint = (i) => (i.memory ? null : i.state !== 'running' ? 'Server is stopped' : ['NOT_INSTALLED', 'OFFLINE'].includes(i.ssm.status) ? 'Install and enable the SSM agent on this EC2 machine to collect RAM input' : 'Enable the CloudWatch agent memory metric (mem_used_percent) to collect RAM input');
+const storageHint = (i) => (i.storage.usedGiB !== null && i.storage.freeGiB !== null ? null : i.state !== 'running' ? 'Server is stopped' : 'Enable CloudWatch metric to collect storage inputs');
+const Hint = ({ t }) => <span className="pill warn" style={{ whiteSpace: 'normal' }}>{t}</span>;
 const Badge = ({ kind, children }) => <span className={`pill ${kind}`}>{children}</span>;
 const logBadge = (s) => ({
   ENABLED: <Badge kind="ok">Enabled</Badge>, DISABLED: <Badge kind="bad">Not enabled</Badge>, NOT_ENABLED: <Badge kind="bad">Not enabled</Badge>,
@@ -85,9 +88,9 @@ export function AmcOverview({ clientId }) {
                 <tr>
                   <td><span className="server-name"><span className={`dot ${i.state}`} /><b>{i.name || i.instanceId}</b></span><div className="muted">{i.instanceId} · {i.instanceType} · {i.region}</div>{ssmBadge(i.ssm.status)}</td>
                   <td>{i.cpu ? `${i.cpu.average}%` : '—'}</td><td>{i.cpu ? `${i.cpu.peak}%` : '—'}</td>
-                  <td>{i.memory ? `${i.memory.average}%` : <span className="muted">n/a</span>}</td><td>{i.memory ? `${i.memory.peak}%` : <span className="muted">n/a</span>}</td>
+                  {ramHint(i) ? <td colSpan="2"><Hint t={ramHint(i)} /></td> : <><td>{i.memory.average}%</td><td>{i.memory.peak}%</td></>}
                   <td>{i.storage.volumes.length}</td><td>{i.storage.provisionedGiB} GiB</td>
-                  <td>{i.storage.usedGiB !== null ? `${i.storage.usedGiB} GiB` : <span className="muted">n/a</span>}</td><td>{i.storage.freeGiB !== null ? `${i.storage.freeGiB} GiB` : <span className="muted">n/a</span>}</td>
+                  {storageHint(i) ? <td colSpan="2"><Hint t={storageHint(i)} /></td> : <><td>{i.storage.usedGiB} GiB</td><td>{i.storage.freeGiB} GiB</td></>}
                   <td>{logBadge(i.logging.vpcFlowLogs)}</td><td>{logBadge(i.logging.loadBalancerLogs)}</td><td>{logBadge(i.logging.cloudtrail)}</td>
                   <td><button onClick={() => setOpen({ ...open, [i.instanceId]: !open[i.instanceId] })}>{open[i.instanceId] ? 'Hide' : 'Details'}</button></td>
                 </tr>

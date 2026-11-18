@@ -1,5 +1,6 @@
 'use strict';
 const { cpuChart, memChart } = require('./charts');
+const { ramNote, storageNote } = require('./amc-text');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const B = (t, c) => `<span class="b ${c}">${esc(t)}</span>`;
 const logBadge = (s) => ({ ENABLED: B('Enabled', 'ok'), DISABLED: B('Not enabled', 'bad'), NOT_ENABLED: B('Not enabled', 'bad'), PARTIAL: B('Partial', 'warn'), NONE: B('Not enabled', 'bad'), 'N/A': B('No load balancer', 'ok'), UNKNOWN: B('Unknown', 'warn') }[s] || B(s, 'warn'));
@@ -34,13 +35,23 @@ ${i.recommendations.map((r) => `<p><b>Recommendation:</b> ${esc(r)}</p>`).join('
 const pct = (v) => (v === null || v === undefined ? '—' : `${v}%`);
 const gib = (v) => (v === null || v === undefined ? '<span class="meta">not reported</span>' : `${v} GiB`);
 
-// One row per server: CPU and RAM average/peak, EBS volumes, assigned / utilised / available storage
-function serverTable(a) {
-  const rows = a.instances.map((i) => `<tr><td><b>${esc(i.name || i.instanceId)}</b><div class="meta">${esc(i.instanceId)} · ${esc(i.region)}</div></td><td>${esc(i.state)}</td>
+const hint = (t) => `<span class="b warn" style="white-space:normal;display:inline-block">${esc(t)}</span>`;
+
+// Server overview shown at the top of the report: one row per server, with a hint instead of a blank where data is missing
+function renderServerOverview(r) {
+  const a = r.amc;
+  if (!a || a.failed || !a.instances.length) return '';
+  const rows = a.instances.map((i) => {
+    const rn = ramNote(i); const sn = storageNote(i);
+    return `<tr><td><b>${esc(i.name || i.instanceId)}</b><div class="meta">${esc(i.instanceId)}</div></td><td>${esc(i.region)}</td><td>${esc(i.state)}</td>
     <td>${pct(i.cpu?.average)}</td><td>${pct(i.cpu?.peak)}</td>
-    <td>${i.memory ? pct(i.memory.average) : '<span class="meta">not reported</span>'}</td><td>${i.memory ? pct(i.memory.peak) : '<span class="meta">not reported</span>'}</td>
-    <td>${i.storage.volumes.length}</td><td>${i.storage.provisionedGiB} GiB</td><td>${gib(i.storage.usedGiB)}</td><td>${gib(i.storage.freeGiB)}</td></tr>`).join('');
-  return `<table><tr><th>Server</th><th>State</th><th>CPU avg</th><th>CPU peak</th><th>RAM avg</th><th>RAM peak</th><th>EBS volumes</th><th>Storage assigned</th><th>Storage utilised</th><th>Storage available</th></tr>${rows}</table>`;
+    ${rn ? `<td colspan="2">${hint(rn)}</td>` : `<td>${pct(i.memory.average)}</td><td>${pct(i.memory.peak)}</td>`}
+    <td>${i.storage.provisionedGiB} GiB<div class="meta">${i.storage.volumes.length} EBS volume(s)</div></td>
+    ${sn ? `<td colspan="2">${hint(sn)}</td>` : `<td>${i.storage.usedGiB} GiB</td><td>${i.storage.freeGiB} GiB</td>`}</tr>`;
+  }).join('');
+  return `<h2>Server overview</h2>
+<p class="meta">Last ${a.period.days} days, hourly. CPU comes from CloudWatch; RAM and storage usage need the agents mentioned below.</p>
+<table><tr><th>Server</th><th>Region</th><th>State</th><th>CPU avg</th><th>CPU peak</th><th>RAM avg</th><th>RAM peak</th><th>Storage allocated</th><th>Storage utilised</th><th>Storage available</th></tr>${rows}</table>`;
 }
 
 function renderAmcSection(r, num) {
@@ -55,8 +66,7 @@ function renderAmcSection(r, num) {
 <div class="c"><div class="n">${s.unhealthy}</div><div class="l">Unhealthy</div></div>
 <div class="c"><div class="n">${s.flowLogsGaps}</div><div class="l">No VPC flow logs</div></div></div>
 <p class="meta">Metrics cover the last ${a.period.days} days at hourly resolution (${esc(a.period.start.slice(0, 10))} to ${esc(a.period.end.slice(0, 10))}). RAM and in-server disk usage come from the CloudWatch agent; they are not available without it.</p>
-${a.instances.length ? serverTable(a) : ''}
 ${a.instances.length ? a.instances.map((i) => renderServer(i, a.period)).join('') : '<p>No servers found.</p>'}`;
 }
 
-module.exports = { renderAmcSection, renderServer };
+module.exports = { renderAmcSection, renderServer, renderServerOverview };

@@ -9,6 +9,7 @@ const {
 } = require('./guidance');
 
 const { cpuChart, memChart } = require('./charts');
+const { ramNote, storageNote } = require('./amc-text');
 let Resvg = null;
 try { ({ Resvg } = require('@resvg/resvg-js')); } catch { Resvg = null; } // charts are skipped when the renderer is unavailable
 const { ImageRun } = require('docx');
@@ -156,6 +157,22 @@ function chartImage(svg) {
   } catch { return null; }
 }
 
+function serverOverview(r) {
+  const a = r.amc;
+  if (!a || a.failed || !a.instances.length) return [];
+  const pc = (v) => (v === null || v === undefined ? '—' : `${v}%`);
+  const hintP = (t) => new Paragraph({ children: [run(t, { size: 16, bold: true, color: '8A5A00' })] });
+  const rows = a.instances.map((i) => {
+    const rn = ramNote(i); const sn = storageNote(i);
+    return [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state, pc(i.cpu?.average), pc(i.cpu?.peak),
+      rn ? hintP(rn) : pc(i.memory.average), rn ? '' : pc(i.memory.peak),
+      `${i.storage.provisionedGiB} GiB (${i.storage.volumes.length} EBS)`, sn ? hintP(sn) : `${i.storage.usedGiB} GiB`, sn ? '' : `${i.storage.freeGiB} GiB`];
+  });
+  return [h1('Server overview'), para(`Last ${a.period.days} days, hourly. RAM and storage usage need the agents mentioned in the table.`),
+    table(['Server', 'Region', 'State', 'CPU avg', 'CPU peak', 'RAM avg', 'RAM peak', 'Storage allocated', 'Storage utilised', 'Storage available'], rows,
+      [2600, 1100, 900, 900, 900, 1500, 900, 1700, 1500, 1500])];
+}
+
 function amcSection(r, num) {
   const a = r.amc;
   const out = [h1(`${num}. AMC server details`)];
@@ -210,6 +227,7 @@ async function buildDocx(r) {
   ], [5000, PAGE_W - 5000]));
 
   /* 1. Backup */
+  body.push(...serverOverview(r));
   body.push(h1('1. Backup status and recommendations'));
   const inst = r.regions.flatMap((x) => x.instances.map((i) => ({ region: x.region, i })));
   if (inst.length) {

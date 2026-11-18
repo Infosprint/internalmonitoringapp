@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { paths } = require('./store');
-const { renderAmcSection } = require('./amc-render');
+const { renderAmcSection, renderServerOverview } = require('./amc-render');
 const { NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs } = require('./guidance');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -159,6 +159,7 @@ th{background:#eef0ff;color:#3730a3}
 <div class="c"><div class="n">${s.findings.medium}</div><div class="l">Medium findings</div></div>
 ${s.securityFindings ? `<div class="c"><div class="n">${s.securityFindings.total}</div><div class="l">Unique service findings${s.securityFindings.totalOccurrences ? ` (${s.securityFindings.totalOccurrences} total)` : ''}</div></div>` : ''}
 </div>
+${renderServerOverview(r)}
 ${renderBackupSection(r)}
 ${renderNetworkSection(r)}
 ${r.amc ? renderAmcSection(r, 3) : ''}
