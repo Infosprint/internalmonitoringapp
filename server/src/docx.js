@@ -5,14 +5,11 @@ const {
   ExternalHyperlink, PageOrientation, Footer, PageNumber, AlignmentType,
 } = require('docx');
 const {
-  NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs,
+  WINDOW_DAYS, NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs,
 } = require('./guidance');
 
-const { cpuChart, memChart } = require('./charts');
 const { ramNote, storageNote } = require('./amc-text');
-let Resvg = null;
-try { ({ Resvg } = require('@resvg/resvg-js')); } catch { Resvg = null; } // charts are skipped when the renderer is unavailable
-const { ImageRun } = require('docx');
+const { s3Tables, rdsTables, cfTables, fmtBytes } = require('./svc-text');
 
 const SEV_COLOR = { CRITICAL: '7F1D1D', HIGH: 'D93025', MEDIUM: 'B06A00', LOW: '1A73E8', INFORMATIONAL: '52606D' };
 const STATUS = {
@@ -77,7 +74,7 @@ function findingsTable(list) {
   const note = findingsNote(sel);
   const out = [];
   if (!sel.shown.length) {
-    out.push(para([run(`No ${thresholdLabel()} findings.`, { bold: true, color: '116530' })]));
+    out.push(para([run(`No ${thresholdLabel()} findings first detected in the last ${WINDOW_DAYS} days.`, { bold: true, color: '116530' })]));
   } else {
     const rows = sel.shown.map((f) => {
       const rec = f.recommendation || {};
@@ -149,61 +146,80 @@ function networkSection(r) {
   return out;
 }
 
-function chartImage(svg) {
-  if (!Resvg || !svg) return null;
-  try {
-    const png = new Resvg(svg.replace('width="100%"', 'width="520"'), { fitTo: { mode: 'width', value: 1040 }, font: { loadSystemFonts: true } }).render().asPng();
-    return new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 440, height: 145 } })], spacing: { after: 80 } });
-  } catch { return null; }
-}
-
 function serverOverview(r) {
   const a = r.amc;
   if (!a || a.failed || !a.instances.length) return [];
   const pc = (v) => (v === null || v === undefined ? '—' : `${v}%`);
   const hintP = (t) => new Paragraph({ children: [run(t, { size: 16, bold: true, color: '8A5A00' })] });
+  const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer' }[s] || 'Unknown');
   const rows = a.instances.map((i) => {
     const rn = ramNote(i); const sn = storageNote(i);
     return [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state, pc(i.cpu?.average), pc(i.cpu?.peak),
       rn ? hintP(rn) : pc(i.memory.average), rn ? '' : pc(i.memory.peak),
       `${i.storage.provisionedGiB} GiB (${i.storage.volumes.length} EBS)`, sn ? hintP(sn) : `${i.storage.usedGiB} GiB`, sn ? '' : `${i.storage.freeGiB} GiB`];
   });
+  const health = (i) => (i.health.length ? i.health.map((h) => `${h.kind === 'asg' ? 'Auto Scaling' : h.kind === 'classic' ? 'Classic LB' : 'Target group'} ${[h.lb, h.group].filter(Boolean).join('/')}: ${h.state || 'unknown'}${h.reason ? ` (${h.reason})` : ''}`).join('; ') : 'Not behind a load balancer or Auto Scaling group');
+  const rows2 = a.instances.map((i) => [`${i.name || ''} ${i.instanceId}`.trim(), i.ssm.status.replace('_', ' ').toLowerCase(), health(i), lg(i.logging.vpcFlowLogs), lg(i.logging.loadBalancerLogs), lg(i.logging.cloudtrail)]);
   return [h1('Server overview'), para(`Last ${a.period.days} days, hourly. RAM and storage usage need the agents mentioned in the table.`),
     table(['Server', 'Region', 'State', 'CPU avg', 'CPU peak', 'RAM avg', 'RAM peak', 'Storage allocated', 'Storage utilised', 'Storage available'], rows,
-      [2600, 1100, 900, 900, 900, 1500, 900, 1700, 1500, 1500])];
+      [2600, 1100, 900, 900, 900, 1500, 900, 1700, 1500, 1500]),
+    h2('Server health and logging'),
+    table(['Server', 'SSM agent', 'Load balancer / target group / Auto Scaling health', 'VPC flow logs', 'Load balancer logs', 'CloudTrail'], rows2, [2800, 1300, 5000, 1900, 1900, 1900])];
 }
 
-function amcSection(r, num) {
-  const a = r.amc;
-  const out = [h1(`${num}. AMC server details`)];
-  if (a.failed) { out.push(para('The AMC checks could not be completed. See the scan warnings.')); return out; }
-  const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer', UNKNOWN: 'Unknown' }[s] || s);
-  out.push(para(`Metrics cover the last ${a.period.days} days at hourly resolution. RAM and in-server disk usage need the CloudWatch agent on the server.`));
-  if (!a.instances.length) { out.push(para('No servers found.')); return out; }
-  const nr = (v, f) => (v === null || v === undefined ? 'Not reported' : f(v));
-  out.push(table(['Server', 'Region', 'State', 'CPU avg', 'CPU peak', 'RAM avg', 'RAM peak', 'EBS volumes', 'Storage assigned', 'Storage utilised', 'Storage available', 'SSM agent', 'VPC flow logs', 'LB logs', 'CloudTrail'],
-    a.instances.map((i) => [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state,
-      nr(i.cpu?.average, (v) => `${v}%`), nr(i.cpu?.peak, (v) => `${v}%`), nr(i.memory?.average, (v) => `${v}%`), nr(i.memory?.peak, (v) => `${v}%`),
-      String(i.storage.volumes.length), `${i.storage.provisionedGiB} GiB`, nr(i.storage.usedGiB, (v) => `${v} GiB`), nr(i.storage.freeGiB, (v) => `${v} GiB`),
-      i.ssm.status.replace('_', ' ').toLowerCase(), lg(i.logging.vpcFlowLogs), lg(i.logging.loadBalancerLogs), lg(i.logging.cloudtrail)]),
-    [1900, 800, 700, 700, 700, 700, 700, 650, 900, 900, 900, 850, 850, 800, 900]));
-  out.push(h2(`${num}.1 Load balancer, target group and Auto Scaling health`));
-  const hrows = a.instances.flatMap((i) => i.health.map((h) => [i.instanceId, h.kind === 'asg' ? 'Auto Scaling' : h.kind === 'classic' ? 'Classic LB' : 'Target group', [h.lb, h.group].filter(Boolean).join(' / '), h.state || 'unknown', h.reason || h.description || '']));
-  out.push(hrows.length ? table(['Server', 'Type', 'Load balancer / group', 'State', 'Reason'], hrows, [2400, 1600, 4200, 1400, 5238]) : para('No server is attached to a load balancer or Auto Scaling group.'));
-  out.push(h2(`${num}.2 Recommendations`));
-  const recs = a.instances.flatMap((i) => i.recommendations.map((x) => [i.name || i.instanceId, x]));
-  out.push(recs.length ? table(['Server', 'Recommendation'], recs, [3000, 11838]) : para([run('No monitoring gaps found.', { bold: true, color: '116530' })]));
-  out.push(h2(`${num}.3 CPU and RAM, last ${a.period.days} days`));
-  let drawn = false;
-  for (const i of a.instances.filter((x) => x.state === 'running').slice(0, 25)) {
-    const c = chartImage(cpuChart(i, a.period)); const m = chartImage(memChart(i, a.period));
-    if (!c && !m) continue;
-    drawn = true;
-    out.push(para([run(`${i.name || ''} ${i.instanceId}`.trim(), { bold: true })]));
-    if (c) out.push(c);
-    if (m) out.push(m);
-  }
-  if (!drawn) out.push(para('Charts are available in the console report; the table above lists the average and peak values.'));
+// generic table from svc-text: cells are strings or { t, k }
+const COLORS = { ok: '116530', bad: 'A31515', warn: '8A5A00' };
+function svcTable(t, widths) {
+  const c = (x) => (x && typeof x === 'object' ? new Paragraph({ children: [run(x.t, { size: 18, bold: true, color: COLORS[x.k] })] }) : String(x ?? ''));
+  return table(t.head, t.rows.map((r) => r.map(c)), widths);
+}
+const equalWidths = (n) => Array.from({ length: n }, () => Math.floor(PAGE_W / n));
+
+function s3Section(r, num) {
+  const out = [h1(`${num}. S3 buckets`)];
+  if (!r.s3) return [...out, para('This report was created before this check was added. Run a new scan to include it.')];
+  if (r.s3.failed) return [...out, para('This review could not be completed. See the scan warnings.')];
+  if (!r.s3.buckets.length) return [...out, para('No S3 buckets found.')];
+  const t = s3Tables(r.s3); const s = r.s3.summary;
+  out.push(para(`${s.buckets} bucket(s), ${fmtBytes(s.totalBytes)} stored in total. ${s.versioningOff} without versioning, ${s.replicationOff} without replication, ${s.policyIssues} with policy issues. Size comes from CloudWatch daily storage metrics (up to two days behind).`));
+  out.push(svcTable(t.main, [2400, 1100, 1100, 1100, 3300, 1300, 1300, 3238]));
+  out.push(h2(`${num}.1 Bucket policy review`));
+  out.push(t.policy.rows.length ? svcTable(t.policy, [1100, 2300, 5000, 6438]) : para([run('No bucket policy issues found.', { bold: true, color: '116530' })]));
+  if (t.policy.more) out.push(small(`${t.policy.more} more issue(s) not listed; see the JSON export.`));
+  const names = (l) => `${l.slice(0, 40).join(', ')}${l.length > 40 ? ` and ${l.length - 40} more` : ''}`;
+  out.push(h2(`${num}.2 Versioning`));
+  out.push(t.noVersioning.length ? para([run('Why versioning should be enabled: ', { bold: true }), run(t.whyVersioning), run(` Buckets without versioning: ${names(t.noVersioning)}.`)]) : para([run('Versioning is enabled on every bucket.', { bold: true, color: '116530' })]));
+  out.push(h2(`${num}.3 Replication`));
+  out.push(t.noReplication.length ? para([run('Why replication should be enabled: ', { bold: true }), run(t.whyReplication), run(` Buckets without replication: ${names(t.noReplication)}.`)]) : para([run('Replication is enabled on every bucket.', { bold: true, color: '116530' })]));
+  return out;
+}
+
+function rdsSection(r, num) {
+  const out = [h1(`${num}. RDS databases`)];
+  if (!r.rds) return [...out, para('This report was created before this check was added. Run a new scan to include it.')];
+  if (r.rds.failed) return [...out, para('This review could not be completed. See the scan warnings.')];
+  if (!r.rds.instances.length) return [...out, para('No RDS databases found in any region.')];
+  const t = rdsTables(r.rds);
+  out.push(para('CPU, RAM and storage cover the last 7 days (daily average and peak).'));
+  out.push(svcTable(t.main, [1500, 900, 2200, 900, 800, 800, 800, 800, 1300, 1400, 1400, 1038]));
+  out.push(h2(`${num}.1 Recommendations and pending updates`));
+  out.push(t.recs.rows.length ? svcTable(t.recs, [3000, 11838]) : para([run('No recommendations. Every database is healthy and up to date.', { bold: true, color: '116530' })]));
+  return out;
+}
+
+function cloudFrontSection(r, num) {
+  const out = [h1(`${num}. CloudFront`)];
+  if (!r.cloudfrontService) return [...out, para('This report was created before this check was added. Run a new scan to include it.')];
+  if (r.cloudfrontService.failed) return [...out, para('This review could not be completed. See the scan warnings.')];
+  const t = cfTables(r.cloudfrontService);
+  if (r.cloudfrontService.distributions.length) {
+    out.push(para('Traffic and error figures cover the last 7 days.'));
+    out.push(svcTable(t.main, [2800, 1000, 1200, 800, 800, 1300, 1100, 1000, 800, 2038]));
+    out.push(h2(`${num}.1 Recommendations`));
+    out.push(t.recs.rows.length ? svcTable(t.recs, [3600, 11238]) : para([run('No recommendations.', { bold: true, color: '116530' })]));
+  } else out.push(para('No CloudFront distributions found.'));
+  out.push(h2(`${num}.${r.cloudfrontService.distributions.length ? 2 : 1} What the AMC team should monitor for CloudFront`));
+  out.push(svcTable(t.monitor, [2600, 7000, 5238]));
   return out;
 }
 
@@ -253,17 +269,17 @@ async function buildDocx(r) {
   /* AMC server details, then GuardDuty, Inspector and Security Hub last */
   body.push(...networkSection(r));
 
-  if (r.amc) body.push(...amcSection(r, 3));
+  body.push(...s3Section(r, 3), ...rdsSection(r, 4), ...cloudFrontSection(r, 5));
 
   SERVICES.forEach(([key, name, sub], idx) => {
-    body.push(h1(`${idx + 3 + (r.amc ? 1 : 0)}. ${name}`));
+    body.push(h1(`${idx + 6}. ${name}`));
     const recs = groupServiceRecs(r.findings, key);
     if (recs.length) recs.forEach((f) => body.push(...recBlock(f)));
     else body.push(para([run('Enabled in every region that runs EC2 instances.', { bold: true, color: '116530' })]));
     if (r.securityFindings) {
       const list = r.securityFindings[key] || [];
       const occ = sc?.occurrences?.[key];
-      body.push(h2(`${sub}: ${thresholdLabel()} (${list.length} unique${occ != null ? `, ${occ} total` : ''} active)`));
+      body.push(h2(`${sub}: ${thresholdLabel()}, first detected in the last ${WINDOW_DAYS} days (${list.length} unique${occ != null ? `, ${occ} total` : ''} active)`));
       body.push(...findingsTable(list));
     }
   });

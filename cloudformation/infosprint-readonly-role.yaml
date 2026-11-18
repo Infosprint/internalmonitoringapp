@@ -108,6 +108,20 @@ Resources:
                   - s3:ListBucket
                   - s3:GetObject
                   - s3:GetBucketLocation
+                  # S3, RDS and CloudFront reviews
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketPolicy
+                  - s3:GetBucketPolicyStatus
+                  - s3:GetBucketVersioning
+                  - s3:GetReplicationConfiguration
+                  - s3:GetBucketPublicAccessBlock
+                  - rds:DescribeDBInstances
+                  - rds:DescribePendingMaintenanceActions
+                  - ec2:DescribeInstanceTypes
+                  - cloudfront:ListInvalidations
+                  - cloudfront:GetDistribution
+                  - cloudwatch:DescribeAlarms
+                  - acm:DescribeCertificate
                 Resource: '*'
       Tags:
         - Key: Purpose

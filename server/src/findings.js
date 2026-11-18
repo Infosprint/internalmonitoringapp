@@ -7,6 +7,9 @@ const { Inspector2Client, ListFindingsCommand: InsListFindingsCommand } = requir
 
 const CAP = Number(process.env.FINDINGS_CAP) || 500; // max findings per service per region
 const MAX_ATTEMPTS = 6;
+// Only findings first detected within this many days are collected (the report covers the last 7 days)
+const FINDINGS_DAYS = Number(process.env.FINDINGS_DAYS) || 7;
+const sinceDate = () => new Date(Date.now() - FINDINGS_DAYS * 24 * 3600 * 1000);
 const DOCS = 'https://docs.aws.amazon.com/guardduty/latest/ug';
 const errMsg = (e) => `${e.name || 'Error'}: ${e.message || e}`;
 const chunk = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
@@ -117,7 +120,7 @@ async function guarddutyFindings(region, credentials) {
     const res = await gd.send(new ListFindingsCommand({
       DetectorId: detectorId, MaxResults: 50, NextToken: token,
       SortCriteria: { AttributeName: 'severity', OrderBy: 'DESC' },
-      FindingCriteria: { Criterion: { 'service.archived': { Eq: ['false'] } } },
+      FindingCriteria: { Criterion: { 'service.archived': { Eq: ['false'] }, createdAt: { GreaterThanOrEqual: sinceDate().getTime() } } },
     }));
     ids.push(...(res.FindingIds || []));
     token = res.NextToken;
@@ -159,6 +162,7 @@ async function securityHubFindings(region, credentials) {
     RecordState: [{ Value: 'ACTIVE', Comparison: 'EQUALS' }],
     WorkflowStatus: [{ Value: 'NEW', Comparison: 'EQUALS' }, { Value: 'NOTIFIED', Comparison: 'EQUALS' }],
     SeverityLabel: [{ Value: 'INFORMATIONAL', Comparison: 'NOT_EQUALS' }],
+    CreatedAt: [{ DateRange: { Value: FINDINGS_DAYS, Unit: 'DAYS' } }],
     ProductName: [{ Value: 'GuardDuty', Comparison: 'NOT_EQUALS' }, { Value: 'Inspector', Comparison: 'NOT_EQUALS' }],
   };
   const items = [];
@@ -208,7 +212,7 @@ async function inspectorFindings(region, credentials) {
   do {
     const res = await ins.send(new InsListFindingsCommand({
       maxResults: 100, nextToken: token,
-      filterCriteria: { findingStatus: [{ comparison: 'EQUALS', value: 'ACTIVE' }] },
+      filterCriteria: { findingStatus: [{ comparison: 'EQUALS', value: 'ACTIVE' }], firstObservedAt: [{ startInclusive: sinceDate() }] },
       sortCriteria: { field: 'SEVERITY', sortOrder: 'DESC' },
     }));
     items.push(...(res.findings || []).map((f) => mapInspector(f, region)));

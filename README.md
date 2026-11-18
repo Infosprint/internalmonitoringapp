@@ -42,6 +42,10 @@ Each client has a partner type, set from the **General** tab of the client list 
 - **Logs page** (AMC clients, button "Logs"): tabs for VPC, CloudTrail, Load balancer and CloudFront. VPCs without flow logs are listed but cannot be fetched. Choose log types and a duration (1 hour, 24 hours, 1 week, 15 days, 30 days); one type gives one file, several types give one file each in a zip. Logs are read from the S3 buckets or CloudWatch Logs the client already uses (CloudTrail uses event history), capped at 300 MB per file and 3000 S3 objects (change with `LOG_MAX_BYTES`, `LOG_MAX_OBJECTS`). Exports live in `exports/` and are deleted after 24 hours; fetches and downloads are written to `data/audit.log`.
 - Existing client roles need the extra read actions in `cloudformation/infosprint-readonly-role.yaml` unless they use the full ReadOnlyAccess managed policy (update the stack if the role was created from an older template).
 
+## What the report contains
+
+Server overview (AMC only, first), 1 Backup, 2 Network exposure and logging, 3 S3 buckets (size, objects, storage classes, bucket policy review, versioning, replication), 4 RDS (status, pending updates, 7-day CPU/RAM/storage, recommendations), 5 CloudFront (distributions, invalidations, traffic and errors, alarms, what the AMC team should monitor), then 6 GuardDuty, 7 Inspector, 8 Security Hub. The three security services list only findings first detected in the last 7 days (`FINDINGS_DAYS` changes this). Reports contain no charts: servers show 7-day average and peak. The 6-month CPU, RAM and storage charts are in the console (open a server's Details on an AMC client page).
+
 ## Run it (Windows PowerShell, in this project folder)
 
 Prerequisites: Node.js 18+ and AWS credentials on the machine running the app (this is the identity that calls `sts:AssumeRole` into each client role – e.g. `aws configure`, `aws sso login`, or `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` env vars).

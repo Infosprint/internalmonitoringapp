@@ -12,6 +12,9 @@ const { collectFindings, groupFindings } = require('./findings');
 const { scanNetworkRegion, scanCloudFront } = require('./network');
 const { AMI_RECOMMENDATION, AMI_WHY } = require('./guidance');
 const { scanAmc } = require('./amc');
+const { scanS3 } = require('./s3scan');
+const { scanRds } = require('./rdsscan');
+const { scanCloudFrontService } = require('./cfscan');
 const { DLMClient, GetLifecyclePoliciesCommand, GetLifecyclePolicyCommand } = require('@aws-sdk/client-dlm');
 
 const { MAX_ATTEMPTS, mapLimit, collect, errMsg, tagMap, chunk, createCredentialProvider, listRegions } = require('./aws');
@@ -415,11 +418,19 @@ async function scanClient(client, onProgress = () => {}, options = {}) {
   // AMC partners get extra detail: server inventory, 8-day CPU/RAM, EBS, load balancer / ASG health, logging status
   let amc = null;
   if (client.partnerType === 'amc') {
-    const range = options.range === '1m' ? '1m' : '1w';
-    onProgress(`AMC partner: collecting server details and ${range === '1m' ? '30-day' : '7-day'} metrics`);
-    amc = await scanAmc({ credentials, range, regions: regionResults.filter((r) => r.instanceCount > 0).map((r) => r.region), onProgress })
+    onProgress('AMC partner: collecting server details and 7-day metrics');
+    amc = await scanAmc({ credentials, regions: regionResults.filter((r) => r.instanceCount > 0).map((r) => r.region), onProgress })
       .catch((e) => ({ failed: true, warnings: [`AMC checks failed: ${errMsg(e)}`], instances: [], summary: null }));
   }
+
+  // S3, RDS and CloudFront service reviews (each fails soft so one missing permission does not stop the scan)
+  const soft = (label, p) => p.catch((e) => ({ failed: true, warnings: [`${label} review failed: ${errMsg(e)}`], summary: null }));
+  onProgress('Reviewing S3, RDS and CloudFront');
+  const [s3, rds, cfService] = await Promise.all([
+    soft('S3', scanS3({ credentials, accountId: client.accountId, onProgress })),
+    soft('RDS', scanRds({ credentials, regions, onProgress })),
+    soft('CloudFront', scanCloudFrontService({ credentials, onProgress })),
+  ]);
 
   const findings = buildFindings(regionResults);
 
@@ -442,8 +453,9 @@ async function scanClient(client, onProgress = () => {}, options = {}) {
   const instances = regionResults.flatMap((r) => r.instances);
   regionResults.forEach((r) => { delete r.securityFindings; });
   const sev = (s) => findings.filter((f) => f.severity === s).length;
-  const warnings = [...buildWarnings(regionResults), ...network.warnings, ...(amc?.warnings || [])];
+  const warnings = [...buildWarnings(regionResults), ...network.warnings, ...(amc?.warnings || []), ...(s3.warnings || []), ...(rds.warnings || []), ...(cfService.warnings || [])];
   if (amc) delete amc.warnings;
+  delete s3.warnings; delete rds.warnings; delete cfService.warnings;
   delete network.warnings;
   return {
     client: { id: client.id, name: client.clientName, accountId: client.accountId, roleArn: client.roleArn, partnerType: client.partnerType || 'general' },
@@ -457,6 +469,9 @@ async function scanClient(client, onProgress = () => {}, options = {}) {
       findings: { total: findings.length, high: sev('HIGH'), medium: sev('MEDIUM'), low: sev('LOW') },
       network: network.summary,
       ...(amc && amc.summary ? { amc: amc.summary } : {}),
+      ...(s3.summary ? { s3: s3.summary } : {}),
+      ...(rds.summary ? { rds: rds.summary } : {}),
+      ...(cfService.summary ? { cloudfront: cfService.summary } : {}),
       securityFindings: {
         total: grouped.length, totalOccurrences: all.length,
         guardduty: securityFindings.guardduty.length, securityhub: securityFindings.securityhub.length, inspector: securityFindings.inspector.length,
@@ -472,6 +487,7 @@ async function scanClient(client, onProgress = () => {}, options = {}) {
     findings,
     network,
     ...(amc ? { amc } : {}),
+    s3, rds, cloudfrontService: cfService,
     securityFindings,
     warnings,
   };

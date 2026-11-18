@@ -27,6 +27,7 @@ export const api = {
   deleteClient: (id) => req('DELETE', `/api/clients/${id}`),
   setPartner: (id, partnerType) => req('PUT', `/api/clients/${id}/partner`, { partnerType }),
   amc: (id) => req('GET', `/api/clients/${id}/amc`),
+  amcHistory: (id, region, instanceId) => req('GET', `/api/clients/${id}/amc/history?region=${encodeURIComponent(region)}&instanceId=${encodeURIComponent(instanceId)}&days=180`),
   logSources: (id) => req('GET', `/api/clients/${id}/logs/sources`),
   fetchLogs: (id, body) => req('POST', `/api/clients/${id}/logs/fetch`, body),
   logJob: (id, job) => req('GET', `/api/clients/${id}/logs/jobs/${job}`),

@@ -80,6 +80,13 @@ app.get('/api/clients/:id/amc', wrap((req, res) => {
   const r = JSON.parse(fs.readFileSync(p, 'utf8'));
   res.json({ amc: r.amc || null, scannedAt: r.scan.finishedAt, message: r.amc ? '' : 'The latest scan ran before this account was marked as AMC partner. Run a new scan.' });
 }));
+app.get('/api/clients/:id/amc/history', awrap(async (req, res) => {
+  const c = amcClient(req.params.id);
+  const { region, instanceId } = req.query;
+  if (!/^[a-z]{2}(-[a-z]+)+-\d$/.test(region || '') || !/^i-[0-9a-f]{8,20}$/.test(instanceId || '')) throw Object.assign(new Error('region and instanceId are required'), { status: 400 });
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 180, 7), 365);
+  res.json(await require('./amc').instanceHistory({ credentials: require('./aws').createCredentialProvider(c, 'infosprint-monitoring-history'), region, instanceId, days }));
+}));
 app.get('/api/clients/:id/logs/sources', awrap(async (req, res) => {
   const c = amcClient(req.params.id);
   res.json(await logs.listSources(c));

@@ -2,8 +2,9 @@
 const fs = require('fs');
 const path = require('path');
 const { paths } = require('./store');
-const { renderAmcSection, renderServerOverview } = require('./amc-render');
-const { NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs } = require('./guidance');
+const { renderServerOverview } = require('./amc-render');
+const { renderS3, renderRds, renderCloudFront } = require('./svc-render');
+const { WINDOW_DAYS, NET, byRegion, selectSecurityGroups, capList, AMI_WHY, affected, PREPARED_BY, SERVICES, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs } = require('./guidance');
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'client';
@@ -21,7 +22,7 @@ function renderFindingsTable(list) {
   const sel = selectFindings(list);
   const note = findingsNote(sel);
   if (!sel.shown.length) {
-    return `<p class="ok-msg">No ${esc(thresholdLabel())} findings.</p>${note ? `<p class="meta">${esc(note)}</p>` : ''}`;
+    return `<p class="ok-msg">No ${esc(thresholdLabel())} findings first detected in the last ${WINDOW_DAYS} days.</p>${note ? `<p class="meta">${esc(note)}</p>` : ''}`;
   }
   const rows = sel.shown.map((f) => {
     const rec = f.recommendation || {};
@@ -107,7 +108,7 @@ function renderServiceSection(r, [key, name, sub], n) {
   const occ = r.summary.securityFindings?.occurrences?.[key];
   return `<h2>${n}. ${esc(name)}</h2>
     ${recs.length ? recs.map(renderRecCard).join('') : '<p class="ok-msg">Enabled in every region that runs EC2 instances.</p>'}
-    ${r.securityFindings ? `<h3>${esc(sub)}: ${esc(thresholdLabel())} (${list.length} unique${occ != null ? `, ${occ} total` : ''} active)</h3>${renderFindingsTable(list)}` : ''}`;
+    ${r.securityFindings ? `<h3>${esc(sub)}: ${esc(thresholdLabel())}, first detected in the last ${WINDOW_DAYS} days (${list.length} unique${occ != null ? `, ${occ} total` : ''} active)</h3>${renderFindingsTable(list)}` : ''}`;
 }
 
 function renderHtml(r) {
@@ -162,8 +163,10 @@ ${s.securityFindings ? `<div class="c"><div class="n">${s.securityFindings.total
 ${renderServerOverview(r)}
 ${renderBackupSection(r)}
 ${renderNetworkSection(r)}
-${r.amc ? renderAmcSection(r, 3) : ''}
-${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 3 + (r.amc ? 1 : 0))).join('')}
+${renderS3(r, 3)}
+${renderRds(r, 4)}
+${renderCloudFront(r, 5)}
+${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 6)).join('')}
 <h2>Appendix: security services by region (regions with EC2 instances)</h2>
 <table><tr><th>Region</th><th>Instances</th><th>GuardDuty</th><th>Inspector</th><th>Security Hub</th></tr>${regionRowsOrdered || '<tr><td colspan="5">No EC2 instances found.</td></tr>'}</table>
 ${warnings}

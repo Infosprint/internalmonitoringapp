@@ -45,6 +45,7 @@ const MIN_SEVERITY = (process.env.REPORT_MIN_SEVERITY || 'HIGH').toUpperCase();
 const MAX_PER_SERVICE = Number(process.env.REPORT_MAX_FINDINGS) || 25;
 const LABELS = { CRITICAL: 'Critical', HIGH: 'Critical and High', MEDIUM: 'Critical, High and Medium', LOW: 'Critical, High, Medium and Low' };
 const thresholdLabel = () => LABELS[MIN_SEVERITY] || LABELS.HIGH;
+const WINDOW_DAYS = Number(process.env.FINDINGS_DAYS) || 7;
 
 function selectFindings(list, cap = MAX_PER_SERVICE) {
   const limit = RANK[MIN_SEVERITY] ?? 1;
@@ -114,4 +115,4 @@ function capList(list) {
   return { shown: list.slice(0, NET_CAP), more: Math.max(0, list.length - NET_CAP) };
 }
 
-module.exports = { NET, byRegion, selectSecurityGroups, capList, NET_CAP, AMI_RECOMMENDATION, AMI_WHY, affected, PREPARED_BY, SERVICES, serviceOf, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs, MAX_PER_SERVICE };
+module.exports = { WINDOW_DAYS, NET, byRegion, selectSecurityGroups, capList, NET_CAP, AMI_RECOMMENDATION, AMI_WHY, affected, PREPARED_BY, SERVICES, serviceOf, instanceRecommendation, selectFindings, findingsNote, thresholdLabel, trunc, groupServiceRecs, MAX_PER_SERVICE };

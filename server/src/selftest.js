@@ -94,8 +94,8 @@ assert(htmlBig.includes('15 more'), 'overflow noted');
 assert(htmlG.includes('Enable an AMI backup policy'), 'AMI recommendation present');
 assert(htmlG.includes('Report prepared by') && htmlG.includes('Infosprint Technologies Private Limited'), 'prepared by');
 assert(htmlG.includes('Report prepared for') && htmlG.includes('A (111122223333)'), 'prepared for with account id');
-const pos = ['<h2>1. Backup status and recommendations', '<h2>2. Network exposure and logging', '<h2>3. Amazon GuardDuty', '<h2>4. Amazon Inspector', '<h2>5. AWS Security Hub'].map((x) => htmlG.indexOf(x));
-assert(pos.every((p) => p > 0) && pos.every((p, i) => i === 0 || p > pos[i - 1]), 'sections in order: backup, GuardDuty, Inspector, Security Hub');
+const pos = ['<h2>1. Backup status and recommendations', '<h2>2. Network exposure and logging', '<h2>3. S3 buckets', '<h2>4. RDS databases', '<h2>5. CloudFront', '<h2>6. Amazon GuardDuty', '<h2>7. Amazon Inspector', '<h2>8. AWS Security Hub'].map((x) => htmlG.indexOf(x));
+assert(pos.every((p) => p > 0) && pos.every((p, i) => i === 0 || p > pos[i - 1]), 'sections in order: backup, network, S3, RDS, CloudFront, then GuardDuty, Inspector, Security Hub');
 assert(htmlG.indexOf('Why enabling an AMI backup policy is mandatory') < pos[1], 'backup info comes before network');
 {
   const net = require('./network');

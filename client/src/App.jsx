@@ -76,7 +76,7 @@ function Dashboard({ clients, job, busy, scan, remove, refresh, setError }) {
       <section className="card">
         <div className="tabs">{PARTNER_TABS.map(([t, n]) => <button key={t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => pick(t)}>{n}<span className="count">{count(t)}</span></button>)}</div>
         {tab === 'general' && <p className="muted">All onboarded accounts. Move an account to AMC partner (adds server metrics, health and log fetching to the scan) or Billing partner (standard scan).</p>}
-        {tab === 'amc' && <p className="muted">AMC partners get the standard scan plus server inventory, CPU/RAM history (1 week or 1 month), storage, load balancer health and a Logs page.</p>}
+        {tab === 'amc' && <p className="muted">AMC partners get the standard scan plus server inventory, 7-day CPU/RAM peak and average, storage, load balancer health and a Logs page.</p>}
         {tab === 'billing' && <p className="muted">Billing partners get the standard scan.</p>}
         {!shown.length ? <div className="empty">{tab === 'general' ? 'No clients yet. Click “Add client”.' : 'No accounts in this tab yet. Move one from the General tab.'}</div> : (
           <table>
@@ -497,13 +497,13 @@ function Console({ user, onSignOut }) {
   const [scanDlg, setScanDlg] = useState(null);
   function scan(id) {
     const c = clients.find((x) => x.id === id);
-    setScanDlg({ id, name: c?.clientName, mode: c?.partnerType === 'amc' ? 'amc' : 'billing', range: '1w' });
+    setScanDlg({ id, name: c?.clientName, mode: c?.partnerType === 'amc' ? 'amc' : 'billing' });
   }
   async function runScan() {
     const d = scanDlg;
     setScanDlg(null);
     setError('');
-    try { setJob(await (d.id ? api.scan(d.id, { mode: d.mode, range: d.range }) : api.scanAll({ range: d.range }))); await refresh(); } catch (err) { setError(err.message); }
+    try { setJob(await (d.id ? api.scan(d.id, { mode: d.mode }) : api.scanAll({}))); await refresh(); } catch (err) { setError(err.message); }
   }
 
   const busy = job?.status === 'running';
@@ -530,15 +530,11 @@ function Console({ user, onSignOut }) {
           {scanDlg.id ? (
             <div className="choice-grid">
               {[['billing', 'Billing partner', 'Standard scan: backups, GuardDuty, Inspector, Security Hub, network and logging.'],
-                ['amc', 'AMC partner', 'Standard scan plus servers, CPU/RAM history, storage, load balancer health and logs.']].map(([m, t, d]) => (
+                ['amc', 'AMC partner', 'Standard scan plus servers (7-day CPU/RAM, storage, health) and the 6-month charts and Logs page in the console.']].map(([m, t, d]) => (
                 <button key={m} type="button" className={`choice ${scanDlg.mode === m ? 'on' : ''}`} onClick={() => setScanDlg({ ...scanDlg, mode: m })}><b>{t}</b><span>{d}</span></button>
               ))}
             </div>
           ) : <p className="muted" style={{ margin: 0 }}>Each account is scanned according to its partner type (General accounts get the standard scan).</p>}
-          {(!scanDlg.id || scanDlg.mode === 'amc') && (
-            <div><div className="muted small" style={{ marginBottom: 6, fontWeight: 650 }}>CPU AND RAM HISTORY (AMC)</div>
-              <div className="chips">{[['1w', '1 week'], ['1m', '1 month']].map(([v, n]) => <button key={v} type="button" className={`chip ${scanDlg.range === v ? 'on' : ''}`} onClick={() => setScanDlg({ ...scanDlg, range: v })}>{n}</button>)}</div></div>
-          )}
           {scanDlg.id && <p className="muted small" style={{ margin: 0 }}>The account is saved as {scanDlg.mode === 'amc' ? 'AMC' : 'Billing'} partner.</p>}
           <div className="row-actions"><button onClick={() => setScanDlg(null)}>Cancel</button><button className="primary" onClick={runScan}>Start scan</button></div>
         </div></div>

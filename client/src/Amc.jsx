@@ -3,25 +3,52 @@ import { api } from './api.js';
 
 const go = (path) => { window.location.hash = `#${path}`; };
 
-/* ---------- small SVG line chart ---------- */
-function LineChart({ series, startMs, title }) {
+/* ---------- small SVG line chart (x axis: dates from startMs in steps of stepMs) ---------- */
+function LineChart({ series, startMs, stepMs = 3600000, title }) {
   const W = 520; const H = 170; const m = { l: 34, r: 10, t: 22, b: 24 };
   const w = W - m.l - m.r; const h = H - m.t - m.b;
   const n = Math.max(...series.map((s) => s.values.length), 1);
   const x = (i) => m.l + (n <= 1 ? 0 : (i / (n - 1)) * w);
   const y = (v) => m.t + h - (Math.min(v, 100) / 100) * h;
   const path = (vals) => { let d = ''; let pen = false; vals.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`; pen = true; }); return d; };
+  const ticks = Array.from({ length: 6 }, (_, k) => Math.round((k * (n - 1)) / 5));
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, background: '#fff', border: '1px solid #e4e7eb', borderRadius: 6 }} role="img" aria-label={title}>
-      {series.map((s, k) => <text key={s.name} x={m.l + 6 + k * 90} y="12" fontSize="10" fill={s.color}>■ {s.name}</text>)}
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, background: '#fff', border: '1px solid #e4e7eb', borderRadius: 10 }} role="img" aria-label={title}>
+      {series.map((s, k) => <text key={s.name} x={m.l + 6 + k * 100} y="12" fontSize="10" fill={s.color}>■ {s.name}</text>)}
       {[0, 25, 50, 75, 100].map((v) => (
         <g key={v}><line x1={m.l} x2={W - m.r} y1={y(v)} y2={y(v)} stroke="#e4e7eb" /><text x={m.l - 4} y={y(v) + 3} textAnchor="end" fontSize="9" fill="#52606d">{v}%</text></g>
       ))}
-      {Array.from({ length: Math.ceil(n / 24) }, (_, d) => (
-        <text key={d} x={x(d * 24)} y={H - 8} fontSize="9" fill="#52606d">{new Date(startMs + d * 86400000).toISOString().slice(5, 10)}</text>
-      ))}
+      {ticks.map((i) => <text key={i} x={x(i)} y={H - 8} fontSize="9" fill="#52606d" textAnchor={i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}>{new Date(startMs + i * stepMs).toISOString().slice(0, 10)}</text>)}
       {series.map((s) => <path key={s.name} d={path(s.values)} fill="none" stroke={s.color} strokeWidth="1.5" strokeDasharray={s.dash ? '3 2' : undefined} />)}
     </svg>
+  );
+}
+
+const COLORS = ['#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+
+// Last 6 months of CPU, RAM and disk usage, fetched when a server's details are opened (not part of the report)
+function History({ clientId, i }) {
+  const [h, setH] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    let live = true;
+    api.amcHistory(clientId, i.region, i.instanceId).then((d) => live && setH(d)).catch((e) => live && setErr(e.message));
+    return () => { live = false; };
+  }, [clientId, i.region, i.instanceId]);
+  if (err) return <div className="error">{err}</div>;
+  if (!h) return <><div className="bar"><i /></div><p className="muted">Loading 6-month history…</p></>;
+  const start = new Date(h.start).getTime(); const step = h.stepSeconds * 1000;
+  return (
+    <div className="charts">
+      <div><div className="muted">CPU utilisation, last 6 months</div>
+        <LineChart title="CPU" startMs={start} stepMs={step} series={[{ name: 'Average', color: '#4f46e5', values: h.cpu.avg }, { name: 'Peak', color: '#dc2626', values: h.cpu.max, dash: true }]} /></div>
+      <div><div className="muted">RAM utilisation, last 6 months</div>
+        {h.memory ? <LineChart title="RAM" startMs={start} stepMs={step} series={[{ name: 'Average', color: '#059669', values: h.memory.avg }, { name: 'Peak', color: '#d97706', values: h.memory.max, dash: true }]} />
+          : <div className="notice">{ramHint(i) || 'No RAM metrics in CloudWatch.'}</div>}</div>
+      <div><div className="muted">Storage utilisation, last 6 months</div>
+        {h.disks.length ? <LineChart title="Storage" startMs={start} stepMs={step} series={h.disks.map((d, k) => ({ name: d.name, color: COLORS[k % COLORS.length], values: d.values }))} />
+          : <div className="notice">Enable CloudWatch metric to collect storage inputs</div>}</div>
+    </div>
   );
 }
 
@@ -36,19 +63,11 @@ const logBadge = (s) => ({
 const healthBadge = (s) => (s === 'healthy' ? <Badge kind="ok">Healthy</Badge> : <Badge kind={s === 'unused' ? 'warn' : 'bad'}>{s || 'unknown'}</Badge>);
 const ssmBadge = (s) => ({ ONLINE: <Badge kind="ok">SSM online</Badge>, OFFLINE: <Badge kind="warn">SSM offline</Badge>, NOT_INSTALLED: <Badge kind="bad">SSM not installed</Badge> }[s] || <Badge kind="warn">SSM unknown</Badge>);
 
-function ServerDetail({ i, period }) {
-  const start = new Date(period.start).getTime();
+function ServerDetail({ i, clientId }) {
   const st = i.storage;
   return (
     <div className="amc-detail">
-      {i.state === 'running' ? (
-        <div className="charts">
-          <div><div className="muted">CPU, last {period.days} days{i.cpu ? ` (avg ${i.cpu.average}%, peak ${i.cpu.peak}%)` : ''}</div>
-            {i.cpu ? <LineChart title="CPU" startMs={start} series={[{ name: 'CPU average', color: '#1a73e8', values: i.cpu.avg }, { name: 'CPU peak', color: '#d93025', values: i.cpu.max, dash: true }]} /> : <p className="muted">No CPU data returned.</p>}</div>
-          <div><div className="muted">RAM, last {period.days} days{i.memory ? ` (avg ${i.memory.average}%, peak ${i.memory.peak}%)` : ''}</div>
-            {i.memory ? <LineChart title="RAM" startMs={start} series={[{ name: 'RAM average', color: '#188038', values: i.memory.avg }, { name: 'RAM peak', color: '#f29900', values: i.memory.max, dash: true }]} /> : <p className="muted">No RAM metrics in CloudWatch.</p>}</div>
-        </div>
-      ) : <p className="muted">Server is not running; no recent metrics.</p>}
+      <History clientId={clientId} i={i} />
       <h4>Storage</h4>
       <p>{st.volumes.length} EBS volume(s), {st.provisionedGiB} GiB provisioned{st.usedGiB !== null ? `, about ${st.usedGiB} GiB used and ${st.freeGiB} GiB free` : ''}. {st.note && <span className="muted">{st.note}</span>}</p>
       <table><thead><tr><th>Volume</th><th>Device</th><th>Size</th><th>Type</th><th>Encrypted</th></tr></thead>
@@ -81,7 +100,7 @@ export function AmcOverview({ clientId }) {
       <p className="muted">{s.servers} server(s) · {s.memoryMissing} without RAM metrics · {s.ssmMissing} without SSM agent · {s.unhealthy} unhealthy behind a load balancer/ASG · {s.flowLogsGaps} without full VPC flow logs · {s.cloudtrailGaps} without CloudTrail</p>
       {!a.instances.length ? <p className="muted">No servers found.</p> : (
         <div className="tablewrap"><table>
-          <thead><tr><th>Server</th><th>CPU avg</th><th>CPU peak</th><th>RAM avg</th><th>RAM peak</th><th>EBS</th><th>Assigned</th><th>Utilised</th><th>Available</th><th>VPC logs</th><th>LB logs</th><th>CloudTrail</th><th /></tr></thead>
+          <thead><tr><th>Server</th><th>CPU avg (7d)</th><th>CPU peak (7d)</th><th>RAM avg (7d)</th><th>RAM peak (7d)</th><th>EBS</th><th>Assigned</th><th>Utilised</th><th>Available</th><th>VPC logs</th><th>LB logs</th><th>CloudTrail</th><th /></tr></thead>
           <tbody>
             {a.instances.map((i) => (
               <React.Fragment key={i.instanceId}>
@@ -94,7 +113,7 @@ export function AmcOverview({ clientId }) {
                   <td>{logBadge(i.logging.vpcFlowLogs)}</td><td>{logBadge(i.logging.loadBalancerLogs)}</td><td>{logBadge(i.logging.cloudtrail)}</td>
                   <td><button onClick={() => setOpen({ ...open, [i.instanceId]: !open[i.instanceId] })}>{open[i.instanceId] ? 'Hide' : 'Details'}</button></td>
                 </tr>
-                {open[i.instanceId] && <tr><td colSpan="13"><ServerDetail i={i} period={a.period} /></td></tr>}
+                {open[i.instanceId] && <tr><td colSpan="13"><ServerDetail i={i} clientId={clientId} /></td></tr>}
               </React.Fragment>
             ))}
           </tbody>

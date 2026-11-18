@@ -22,7 +22,7 @@ const { evaluateVpcs } = require('./network');
 const { MAX_ATTEMPTS, mapLimit, collect, errMsg, tagMap, chunk } = require('./aws');
 
 const HOUR_S = 3600;
-const RANGES = { '1w': 7, '1m': 30 }; // days of CPU/RAM history
+const RANGES = { '1w': 7 }; // the report always covers the last 7 days
 const REGION_CONCURRENCY = 3;
 const MAX_TARGET_GROUPS = 150;
 
@@ -391,11 +391,12 @@ async function amcRegion(region, credentials, win) {
     const running = i.state === 'running';
     const ssm = ssmInfo.get(id);
     const ssmState = out.ssmUnknown ? 'UNKNOWN' : ssm ? (ssm.pingStatus === 'Online' ? 'ONLINE' : 'OFFLINE') : 'NOT_INSTALLED';
+    // Only the 7-day average and peak are stored; charts (6 months) are fetched on demand for the console
     const series = (m) => {
-      const fill = (r) => { const a = new Array(win.buckets).fill(null); (r?.timestamps || []).forEach((t, k) => { const idx = Math.floor((new Date(t).getTime() - win.start.getTime()) / (HOUR_S * 1000)); if (idx >= 0 && idx < win.buckets) a[idx] = round1(r.values[k]); }); return a; };
       if (!m || !m.avg) return null;
-      const avg = fill(m.avg); const max = fill(m.max);
-      return { avg, max, average: mean(avg), peak: peak(max) };
+      const avg = (m.avg.values || []).map(round1); const max = (m.max?.values || []).map(round1);
+      if (!avg.length) return null;
+      return { average: mean(avg), peak: peak(max.length ? max : avg) };
     };
     const cpuS = series(cpu.get(id));
     const memS = series(mem.get(id));
@@ -498,4 +499,49 @@ async function scanAmc({ credentials, regions, range = '1w', onProgress = () => 
   };
 }
 
-module.exports = { scanAmc, RANGES };
+/* ---------- on-demand history for the console charts (CPU, RAM, disk), default 6 months ---------- */
+async function instanceHistory({ credentials, region, instanceId, days = 180 }) {
+  const cw = new CloudWatchClient({ region, credentials, maxAttempts: MAX_ATTEMPTS });
+  const step = 6 * 3600;
+  const end = new Date(Math.ceil(Date.now() / (step * 1000)) * step * 1000);
+  const start = new Date(end.getTime() - days * 24 * 3600 * 1000);
+  const buckets = Math.round((days * 24 * 3600) / step);
+  const filter = [{ Name: 'InstanceId', Value: instanceId }];
+  const list = async (namespace, metric) => {
+    const r = await cw.send(new ListMetricsCommand({ Namespace: namespace, MetricName: metric, Dimensions: filter }));
+    return (r.Metrics || []).filter((m) => dimValue(m, 'InstanceId') === instanceId);
+  };
+  let memDef = null;
+  for (const src of MEMORY_SOURCES) { const d = await list(src.namespace, src.metric).catch(() => []); if (d.length) { memDef = { src, dims: d[0].Dimensions }; break; } }
+  const diskDefs = [];
+  for (const src of DISK_SOURCES) {
+    const d = await list(src.namespace, src.metric).catch(() => []);
+    for (const m of d) {
+      const p = src.pick(m);
+      if (!p.name || p.name === '_Total' || SKIP_FS.has(p.fstype) || SKIP_PATH.test(p.name) || diskDefs.some((x) => x.name === p.name)) continue;
+      if (diskDefs.length < 4) diskDefs.push({ name: p.name, usedFrom: p.usedFrom, namespace: src.namespace, metric: src.metric, dims: m.Dimensions });
+    }
+    if (diskDefs.length) break;
+  }
+  const qs = [
+    { id: 'ca', namespace: 'AWS/EC2', metric: 'CPUUtilization', dims: filter, stat: 'Average', period: step },
+    { id: 'cm', namespace: 'AWS/EC2', metric: 'CPUUtilization', dims: filter, stat: 'Maximum', period: step },
+  ];
+  if (memDef) qs.push({ id: 'ma', namespace: memDef.src.namespace, metric: memDef.src.metric, dims: memDef.dims, stat: 'Average', period: step }, { id: 'mm', namespace: memDef.src.namespace, metric: memDef.src.metric, dims: memDef.dims, stat: 'Maximum', period: step });
+  diskDefs.forEach((d, k) => qs.push({ id: `d${k}`, namespace: d.namespace, metric: d.metric, dims: d.dims, stat: 'Average', period: step }));
+  const res = await getMetrics(cw, qs, start, end);
+  const fill = (id, f = (v) => v) => {
+    const a = new Array(buckets).fill(null);
+    const r = res.get(id);
+    (r?.timestamps || []).forEach((t, k) => { const i = Math.floor((new Date(t).getTime() - start.getTime()) / (step * 1000)); if (i >= 0 && i < buckets) a[i] = round1(f(r.values[k])); });
+    return a;
+  };
+  return {
+    start: start.toISOString(), end: end.toISOString(), stepSeconds: step, buckets, days,
+    cpu: { avg: fill('ca'), max: fill('cm') },
+    memory: memDef ? { avg: fill('ma'), max: fill('mm'), source: memDef.src.label } : null,
+    disks: diskDefs.map((d, k) => ({ name: d.name, values: fill(`d${k}`, (v) => (d.usedFrom === 'free' ? 100 - v : v)) })),
+  };
+}
+
+module.exports = { scanAmc, instanceHistory, RANGES };
