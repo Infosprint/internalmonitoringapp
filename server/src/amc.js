@@ -370,7 +370,7 @@ async function amcRegion(region, credentials, win) {
   /* ---------- assemble per-instance rows ---------- */
   const regionTrails = out.trails.filter((t) => t.multiRegion || t.homeRegion === region);
   const loggingTrails = regionTrails.filter((t) => t.isLogging === true);
-  const trailStatus = out.warnings.some((w) => w.includes('CloudTrail:')) ? 'UNKNOWN' : loggingTrails.length ? 'ENABLED' : 'NOT_ENABLED';
+  const trailStatus = out.warnings.some((w) => w.includes('CloudTrail:')) ? 'UNKNOWN' : loggingTrails.length ? 'ENABLED' : 'EVENT_HISTORY'; // CloudTrail event history (90 days of management events) is always on, at no cost
   const vpcStatus = new Map(out.vpcLogging.map((v) => [v.vpcId, v]));
 
   for (const [id, i] of inst) {
@@ -492,7 +492,6 @@ async function scanAmc({ credentials, regions, range = '1w', onProgress = () => 
       unhealthy: unhealthy.length,
       flowLogsGaps: instances.filter((i) => i.logging.vpcFlowLogs !== 'ENABLED').length,
       lbLogGaps: instances.filter((i) => i.logging.loadBalancerLogs === 'DISABLED').length,
-      cloudtrailGaps: instances.filter((i) => i.logging.cloudtrail === 'NOT_ENABLED').length,
       provisionedGiB: instances.reduce((s, i) => s + i.storage.provisionedGiB, 0),
     },
     warnings,

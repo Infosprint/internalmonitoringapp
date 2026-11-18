@@ -5,7 +5,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const B = (t, c) => `<span class="b ${c}">${esc(t)}</span>`;
 const pct = (v) => (v === null || v === undefined ? '—' : `${v}%`);
 const hint = (t) => `<span class="b warn" style="white-space:normal;display:inline-block">${esc(t)}</span>`;
-const logBadge = (s) => ({ ENABLED: B('Enabled', 'ok'), DISABLED: B('Not enabled', 'bad'), NOT_ENABLED: B('Not enabled', 'bad'), NONE: B('Not enabled', 'bad'), PARTIAL: B('Partial', 'warn'), 'N/A': B('No load balancer', 'ok') }[s] || B('Unknown', 'warn'));
+const logBadge = (s) => ({ ENABLED: B('Enabled', 'ok'), DISABLED: B('Not enabled', 'bad'), NOT_ENABLED: B('Not enabled', 'bad'), NONE: B('Not enabled', 'bad'), PARTIAL: B('Partial', 'warn'), 'N/A': B('No load balancer', 'ok'), EVENT_HISTORY: B('Standard logging (event history, 90 days)', 'ok') }[s] || B('Unknown', 'warn'));
 const ssmBadge = (s) => ({ ONLINE: B('Online', 'ok'), OFFLINE: B('Offline', 'warn'), NOT_INSTALLED: B('Not installed', 'bad') }[s] || B('Unknown', 'warn'));
 const healthText = (i) => {
   if (!i.health.length) return 'Not behind a load balancer or Auto Scaling group';

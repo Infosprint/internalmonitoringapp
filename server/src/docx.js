@@ -151,7 +151,7 @@ function serverOverview(r) {
   if (!a || a.failed || !a.instances.length) return [];
   const pc = (v) => (v === null || v === undefined ? '—' : `${v}%`);
   const hintP = (t) => new Paragraph({ children: [run(t, { size: 16, bold: true, color: '8A5A00' })] });
-  const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer' }[s] || 'Unknown');
+  const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer', EVENT_HISTORY: 'Standard logging (event history, 90 days)' }[s] || 'Unknown');
   const rows = a.instances.map((i) => {
     const rn = ramNote(i); const sn = storageNote(i);
     return [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state, pc(i.cpu?.average), pc(i.cpu?.peak),
@@ -297,7 +297,6 @@ async function buildDocx(r) {
     body.push(h1('Scan warnings'));
     r.warnings.forEach((w) => body.push(new Paragraph({ children: [run(`•  ${w}`, { size: 20 })], indent: { left: 400, hanging: 200 }, spacing: { after: 60 } })));
   }
-  body.push(para([run('Backup policy = AWS Backup plan or Data Lifecycle Manager (DLM) policy covering the instance or its volumes. "Manual only" means snapshots/AMIs exist but no policy automates them.', { size: 18, color: '52606D' })], { spacing: { before: 300 } }));
 
   const doc = new Document({
     creator: 'Infosprint Monitoring',

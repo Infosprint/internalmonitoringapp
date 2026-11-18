@@ -170,7 +170,6 @@ ${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 6)).join('')}
 <h2>Appendix: security services by region (regions with EC2 instances)</h2>
 <table><tr><th>Region</th><th>Instances</th><th>GuardDuty</th><th>Inspector</th><th>Security Hub</th></tr>${regionRowsOrdered || '<tr><td colspan="5">No EC2 instances found.</td></tr>'}</table>
 ${warnings}
-<p class="meta" style="margin-top:32px">Backup policy = AWS Backup plan or Data Lifecycle Manager (DLM) policy covering the instance or its volumes. "Manual only" means snapshots/AMIs exist but no policy automates them.</p>
 </div></body></html>`;
 }
 

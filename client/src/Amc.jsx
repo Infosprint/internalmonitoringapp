@@ -58,7 +58,7 @@ const Hint = ({ t }) => <span className="pill warn" style={{ whiteSpace: 'normal
 const Badge = ({ kind, children }) => <span className={`pill ${kind}`}>{children}</span>;
 const logBadge = (s) => ({
   ENABLED: <Badge kind="ok">Enabled</Badge>, DISABLED: <Badge kind="bad">Not enabled</Badge>, NOT_ENABLED: <Badge kind="bad">Not enabled</Badge>,
-  NONE: <Badge kind="bad">Not enabled</Badge>, PARTIAL: <Badge kind="warn">Partial</Badge>, 'N/A': <Badge kind="ok">No load balancer</Badge>,
+  NONE: <Badge kind="bad">Not enabled</Badge>, PARTIAL: <Badge kind="warn">Partial</Badge>, 'N/A': <Badge kind="ok">No load balancer</Badge>, EVENT_HISTORY: <Badge kind="ok">Standard logging</Badge>,
 }[s] || <Badge kind="warn">Unknown</Badge>);
 const healthBadge = (s) => (s === 'healthy' ? <Badge kind="ok">Healthy</Badge> : <Badge kind={s === 'unused' ? 'warn' : 'bad'}>{s || 'unknown'}</Badge>);
 const ssmBadge = (s) => ({ ONLINE: <Badge kind="ok">SSM online</Badge>, OFFLINE: <Badge kind="warn">SSM offline</Badge>, NOT_INSTALLED: <Badge kind="bad">SSM not installed</Badge> }[s] || <Badge kind="warn">SSM unknown</Badge>);
@@ -97,7 +97,7 @@ export function AmcOverview({ clientId }) {
   return (
     <section className="card">
       <h2>AMC server details <span className="muted">(last scan {new Date(data.scannedAt).toLocaleString()})</span></h2>
-      <p className="muted">{s.servers} server(s) · {s.memoryMissing} without RAM metrics · {s.ssmMissing} without SSM agent · {s.unhealthy} unhealthy behind a load balancer/ASG · {s.flowLogsGaps} without full VPC flow logs · {s.cloudtrailGaps} without CloudTrail</p>
+      <p className="muted">{s.servers} server(s) · {s.memoryMissing} without RAM metrics · {s.ssmMissing} without SSM agent · {s.unhealthy} unhealthy behind a load balancer/ASG · {s.flowLogsGaps} without full VPC flow logs</p>
       {!a.instances.length ? <p className="muted">No servers found.</p> : (
         <div className="tablewrap"><table>
           <thead><tr><th>Server</th><th>CPU avg (7d)</th><th>CPU peak (7d)</th><th>RAM avg (7d)</th><th>RAM peak (7d)</th><th>EBS</th><th>Assigned</th><th>Utilised</th><th>Available</th><th>VPC logs</th><th>LB logs</th><th>CloudTrail</th><th /></tr></thead>
