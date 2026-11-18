@@ -379,7 +379,7 @@ function buildNetwork(results, cloudfront) {
   };
 }
 
-async function scanClient(client, onProgress = () => {}) {
+async function scanClient(client, onProgress = () => {}, options = {}) {
   const startedAt = new Date();
   const credentials = createCredentialProvider(client);
 
@@ -415,8 +415,9 @@ async function scanClient(client, onProgress = () => {}) {
   // AMC partners get extra detail: server inventory, 8-day CPU/RAM, EBS, load balancer / ASG health, logging status
   let amc = null;
   if (client.partnerType === 'amc') {
-    onProgress('AMC partner: collecting server details and 8-day metrics');
-    amc = await scanAmc({ credentials, regions: regionResults.filter((r) => r.instanceCount > 0).map((r) => r.region), onProgress })
+    const range = options.range === '1m' ? '1m' : '1w';
+    onProgress(`AMC partner: collecting server details and ${range === '1m' ? '30-day' : '7-day'} metrics`);
+    amc = await scanAmc({ credentials, range, regions: regionResults.filter((r) => r.instanceCount > 0).map((r) => r.region), onProgress })
       .catch((e) => ({ failed: true, warnings: [`AMC checks failed: ${errMsg(e)}`], instances: [], summary: null }));
   }
 

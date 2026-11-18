@@ -22,8 +22,7 @@ const { evaluateVpcs } = require('./network');
 const { MAX_ATTEMPTS, mapLimit, collect, errMsg, tagMap, chunk } = require('./aws');
 
 const HOUR_S = 3600;
-const DAYS = 8;
-const BUCKETS = DAYS * 24; // hourly points
+const RANGES = { '1w': 7, '1m': 30 }; // days of CPU/RAM history
 const REGION_CONCURRENCY = 3;
 const MAX_TARGET_GROUPS = 150;
 
@@ -36,7 +35,7 @@ const peak = (a) => { const v = a.filter((x) => x !== null && x !== undefined); 
 // queries: [{ id, namespace, metric, dims: [{Name,Value}], stat, period }] -> Map(id -> { timestamps, values })
 async function getMetrics(cw, queries, startTime, endTime) {
   const out = new Map();
-  for (const part of chunk(queries, 450)) {
+  for (const part of chunk(queries, 100)) {
     let token;
     do {
       const res = await cw.send(new GetMetricDataCommand({
@@ -181,6 +180,35 @@ async function amcRegion(region, credentials, win) {
       }
     }
   }, null);
+
+  // optional byte-level disk metrics (disk_total / disk_used) when the agent is configured to publish them
+  const byteDefs = new Map(); // instanceId -> Map(path -> { total, used })
+  await attempt('Disk size metrics', async () => {
+    for (const [metric, field] of [['disk_total', 'total'], ['disk_used', 'used']]) {
+      for (const m of await listMetricDefs(cw, 'CWAgent', metric)) {
+        const id = dimValue(m, 'InstanceId'); const p = dimValue(m, 'path');
+        if (!id || !wanted.has(id) || !p || SKIP_FS.has(dimValue(m, 'fstype')) || SKIP_PATH.test(p)) continue;
+        const per = byteDefs.get(id) || new Map();
+        const cur = per.get(p) || {};
+        cur[field] = m.Dimensions; per.set(p, cur); byteDefs.set(id, per);
+      }
+    }
+  }, null);
+  const bytesNow = new Map(); // `${id}|${path}|${field}` -> bytes
+  const byteQs = [];
+  for (const [id, per] of byteDefs) for (const [p, f] of per) for (const field of ['total', 'used']) if (f.total && f.used) byteQs.push({ key: `${id}|${p}|${field}`, id: `b${byteQs.length}`, namespace: 'CWAgent', metric: field === 'total' ? 'disk_total' : 'disk_used', dims: f[field], stat: 'Average', period: 300 });
+  if (byteQs.length) {
+    await attempt('Disk size values', async () => {
+      const res = await getMetrics(cw, byteQs, new Date(win.end.getTime() - 3 * 3600 * 1000), win.end);
+      for (const q of byteQs) {
+        const r = res.get(q.id);
+        if (!r || !r.values.length) continue;
+        let latest = 0; let val = r.values[0];
+        r.timestamps.forEach((t, k) => { const ms = new Date(t).getTime(); if (ms >= latest) { latest = ms; val = r.values[k]; } });
+        bytesNow.set(q.key, val);
+      }
+    }, null);
+  }
 
   const mem = new Map();
   const memIds = [...memDefs.keys()];
@@ -364,7 +392,7 @@ async function amcRegion(region, credentials, win) {
     const ssm = ssmInfo.get(id);
     const ssmState = out.ssmUnknown ? 'UNKNOWN' : ssm ? (ssm.pingStatus === 'Online' ? 'ONLINE' : 'OFFLINE') : 'NOT_INSTALLED';
     const series = (m) => {
-      const fill = (r) => { const a = new Array(BUCKETS).fill(null); (r?.timestamps || []).forEach((t, k) => { const idx = Math.floor((new Date(t).getTime() - win.start.getTime()) / (HOUR_S * 1000)); if (idx >= 0 && idx < BUCKETS) a[idx] = round1(r.values[k]); }); return a; };
+      const fill = (r) => { const a = new Array(win.buckets).fill(null); (r?.timestamps || []).forEach((t, k) => { const idx = Math.floor((new Date(t).getTime() - win.start.getTime()) / (HOUR_S * 1000)); if (idx >= 0 && idx < win.buckets) a[idx] = round1(r.values[k]); }); return a; };
       if (!m || !m.avg) return null;
       const avg = fill(m.avg); const max = fill(m.max);
       return { avg, max, average: mean(avg), peak: peak(max) };
@@ -379,7 +407,13 @@ async function amcRegion(region, credentials, win) {
     // Used/free space can be worked out only when one volume holds the filesystem(s); with several volumes the agent
     // does not say which filesystem sits on which volume, so only the per-filesystem percentages are shown.
     let usedGiB = null; let freeGiB = null; let storageNote = '';
-    if (vols.length === 1 && filesystems.length) {
+    const GIB = 1024 ** 3;
+    const paths = [...(byteDefs.get(id)?.keys() || [])].filter((p) => bytesNow.has(`${id}|${p}|total`) && bytesNow.has(`${id}|${p}|used`));
+    if (paths.length) {
+      const tot = paths.reduce((a, p) => a + bytesNow.get(`${id}|${p}|total`), 0) / GIB;
+      const used = paths.reduce((a, p) => a + bytesNow.get(`${id}|${p}|used`), 0) / GIB;
+      usedGiB = round1(used); freeGiB = round1(Math.max(tot - used, 0));
+    } else if (vols.length === 1 && filesystems.length) {
       const root = filesystems.find((f) => f.name === '/' || /^C:?$/i.test(f.name)) || filesystems[0];
       usedGiB = round1((root.usedPercent / 100) * vols[0].sizeGiB);
       freeGiB = round1(vols[0].sizeGiB - usedGiB);
@@ -415,10 +449,11 @@ async function amcRegion(region, credentials, win) {
 
 /* ---------- whole account ---------- */
 
-async function scanAmc({ credentials, regions, onProgress = () => {} }) {
+async function scanAmc({ credentials, regions, range = '1w', onProgress = () => {} }) {
+  const days = RANGES[range] || 7;
   const now = Date.now();
   const end = new Date(Math.floor(now / 3600000) * 3600000 + 3600000);
-  const win = { start: new Date(end.getTime() - BUCKETS * 3600000), end };
+  const win = { start: new Date(end.getTime() - days * 24 * 3600000), end, days, buckets: days * 24 };
   const warnings = [];
   let done = 0;
   const results = await mapLimit(regions, REGION_CONCURRENCY, async (region) => {
@@ -441,7 +476,7 @@ async function scanAmc({ credentials, regions, onProgress = () => {} }) {
   const running = instances.filter((i) => i.state === 'running');
   const unhealthy = instances.filter((i) => i.health.some((h) => h.state && h.state !== 'healthy' && h.state !== 'unused'));
   return {
-    period: { start: win.start.toISOString(), end: win.end.toISOString(), periodSeconds: HOUR_S, points: BUCKETS, days: DAYS },
+    period: { start: win.start.toISOString(), end: win.end.toISOString(), periodSeconds: HOUR_S, points: win.buckets, days, range },
     instances,
     loadBalancers: results.flatMap((r) => r.balancers).filter((b) => b.groups.some((g) => g.targets.length) || b.loggingEnabled !== null),
     autoScalingGroups: results.flatMap((r) => r.asgs),
@@ -463,4 +498,4 @@ async function scanAmc({ credentials, regions, onProgress = () => {} }) {
   };
 }
 
-module.exports = { scanAmc, bucketsPerWindow: BUCKETS };
+module.exports = { scanAmc, RANGES };

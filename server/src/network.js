@@ -94,7 +94,10 @@ function evaluateVpcs({ vpcs, flowLogs, subnets, enis }) {
   const subnetVpc = new Map(subnets.map((s) => [s.SubnetId, s.VpcId]));
   const eniVpc = new Map(enis.map((e) => [e.NetworkInterfaceId, e.VpcId]));
   const out = [];
+  // Only VPCs that actually host something (an attached network interface: EC2, RDS, load balancer, ...) are worth checking
+  const inUse = new Set(enis.filter((e) => e.Status === 'in-use' || e.Attachment).map((e) => e.VpcId));
   for (const v of vpcs) {
+    if (!inUse.has(v.VpcId)) continue;
     const vpcLevel = active.filter((f) => f.ResourceId === v.VpcId);
     const partial = active.filter((f) => subnetVpc.get(f.ResourceId) === v.VpcId || eniVpc.get(f.ResourceId) === v.VpcId);
     let status; let note = '';

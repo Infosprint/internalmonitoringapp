@@ -161,8 +161,8 @@ ${s.securityFindings ? `<div class="c"><div class="n">${s.securityFindings.total
 </div>
 ${renderBackupSection(r)}
 ${renderNetworkSection(r)}
-${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 3)).join('')}
-${r.amc ? renderAmcSection(r, SERVICES.length + 3) : ''}
+${r.amc ? renderAmcSection(r, 3) : ''}
+${SERVICES.map((svc, idx) => renderServiceSection(r, svc, idx + 3 + (r.amc ? 1 : 0))).join('')}
 <h2>Appendix: security services by region (regions with EC2 instances)</h2>
 <table><tr><th>Region</th><th>Instances</th><th>GuardDuty</th><th>Inspector</th><th>Security Hub</th></tr>${regionRowsOrdered || '<tr><td colspan="5">No EC2 instances found.</td></tr>'}</table>
 ${warnings}

@@ -31,8 +31,8 @@ export const api = {
   fetchLogs: (id, body) => req('POST', `/api/clients/${id}/logs/fetch`, body),
   logJob: (id, job) => req('GET', `/api/clients/${id}/logs/jobs/${job}`),
   cancelLogJob: (id, job) => req('POST', `/api/clients/${id}/logs/jobs/${job}/cancel`, {}),
-  scan: (id) => req('POST', `/api/scan/${id}`),
-  scanAll: () => req('POST', '/api/scan/all'),
+  scan: (id, opts) => req('POST', `/api/scan/${id}`, opts || {}),
+  scanAll: (opts) => req('POST', '/api/scan/all', opts || {}),
   job: (id) => req('GET', `/api/jobs/${id}`),
   reports: () => req('GET', '/api/reports'),
 };

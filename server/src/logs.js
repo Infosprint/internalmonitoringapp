@@ -54,7 +54,9 @@ async function listSources(client) {
           collect(ec2, (t) => new DescribeNetworkInterfacesCommand({ NextToken: t }), (r) => r.NetworkInterfaces),
         ]);
         const gaps = new Map(evaluateVpcs({ vpcs, flowLogs, subnets, enis }).map((v) => [v.vpcId, v]));
+        const inUse = new Set(enis.filter((e) => e.Status === 'in-use' || e.Attachment).map((e) => e.VpcId));
         for (const v of vpcs) {
+          if (!inUse.has(v.VpcId) && !flowLogs.some((f) => f.ResourceId === v.VpcId)) continue; // empty VPCs are not listed
           const logs = flowLogs.filter((f) => f.FlowLogStatus === 'ACTIVE' && (f.ResourceId === v.VpcId || subnets.some((s) => s.VpcId === v.VpcId && s.SubnetId === f.ResourceId) || enis.some((n) => n.VpcId === v.VpcId && n.NetworkInterfaceId === f.ResourceId)))
             .map((f) => ({ id: f.FlowLogId, destinationType: f.LogDestinationType, destination: f.LogDestination || null, logGroup: f.LogGroupName || null, scope: f.ResourceId, traffic: f.TrafficType }));
           const usable = logs.filter((l) => (l.destinationType === 'cloud-watch-logs' && l.logGroup) || (l.destinationType === 's3' && l.destination));

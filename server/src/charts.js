@@ -15,7 +15,8 @@ function lineChart({ series, startMs, stepMs = 3600000, width = 520, height = 17
     g += `<line x1="${m.l}" x2="${width - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#e4e7eb"/><text x="${m.l - 4}" y="${y(v) + 3}" text-anchor="end" font-size="9" fill="#52606d">${Math.round(v)}${unit}</text>`;
   }
   const perDay = Math.round(86400000 / stepMs);
-  for (let i = 0; i < n; i += perDay) {
+  const everyDays = Math.max(1, Math.ceil(n / perDay / 8));
+  for (let i = 0; i < n; i += perDay * everyDays) {
     const d = new Date(startMs + i * stepMs);
     g += `<text x="${x(i)}" y="${height - 8}" font-size="9" fill="#52606d" text-anchor="start">${d.toISOString().slice(5, 10)}</text>`;
   }

@@ -161,21 +161,22 @@ function amcSection(r, num) {
   const out = [h1(`${num}. AMC server details`)];
   if (a.failed) { out.push(para('The AMC checks could not be completed. See the scan warnings.')); return out; }
   const lg = (s) => ({ ENABLED: 'Enabled', DISABLED: 'Not enabled', NOT_ENABLED: 'Not enabled', PARTIAL: 'Partial', NONE: 'Not enabled', 'N/A': 'No load balancer', UNKNOWN: 'Unknown' }[s] || s);
-  out.push(para(`Metrics cover ${a.period.days} days at hourly resolution. RAM and disk usage need the CloudWatch agent on the server.`));
+  out.push(para(`Metrics cover the last ${a.period.days} days at hourly resolution. RAM and in-server disk usage need the CloudWatch agent on the server.`));
   if (!a.instances.length) { out.push(para('No servers found.')); return out; }
-  out.push(table(['Server', 'Region', 'State', 'CPU avg / peak', 'RAM avg / peak', 'EBS volumes', 'Provisioned', 'Used / free', 'SSM agent', 'VPC flow logs', 'LB logs', 'CloudTrail'],
+  const nr = (v, f) => (v === null || v === undefined ? 'Not reported' : f(v));
+  out.push(table(['Server', 'Region', 'State', 'CPU avg', 'CPU peak', 'RAM avg', 'RAM peak', 'EBS volumes', 'Storage assigned', 'Storage utilised', 'Storage available', 'SSM agent', 'VPC flow logs', 'LB logs', 'CloudTrail'],
     a.instances.map((i) => [`${i.name || ''} ${i.instanceId}`.trim(), i.region, i.state,
-      i.cpu ? `${i.cpu.average}% / ${i.cpu.peak}%` : '—', i.memory ? `${i.memory.average}% / ${i.memory.peak}%` : 'Not reported',
-      String(i.storage.volumes.length), `${i.storage.provisionedGiB} GiB`, i.storage.usedGiB !== null ? `${i.storage.usedGiB} / ${i.storage.freeGiB} GiB` : 'Not reported',
+      nr(i.cpu?.average, (v) => `${v}%`), nr(i.cpu?.peak, (v) => `${v}%`), nr(i.memory?.average, (v) => `${v}%`), nr(i.memory?.peak, (v) => `${v}%`),
+      String(i.storage.volumes.length), `${i.storage.provisionedGiB} GiB`, nr(i.storage.usedGiB, (v) => `${v} GiB`), nr(i.storage.freeGiB, (v) => `${v} GiB`),
       i.ssm.status.replace('_', ' ').toLowerCase(), lg(i.logging.vpcFlowLogs), lg(i.logging.loadBalancerLogs), lg(i.logging.cloudtrail)]),
-    [2400, 1000, 900, 1300, 1300, 800, 1000, 1400, 1200, 1200, 1100, 1238]));
+    [1900, 800, 700, 700, 700, 700, 700, 650, 900, 900, 900, 850, 850, 800, 900]));
   out.push(h2(`${num}.1 Load balancer, target group and Auto Scaling health`));
   const hrows = a.instances.flatMap((i) => i.health.map((h) => [i.instanceId, h.kind === 'asg' ? 'Auto Scaling' : h.kind === 'classic' ? 'Classic LB' : 'Target group', [h.lb, h.group].filter(Boolean).join(' / '), h.state || 'unknown', h.reason || h.description || '']));
   out.push(hrows.length ? table(['Server', 'Type', 'Load balancer / group', 'State', 'Reason'], hrows, [2400, 1600, 4200, 1400, 5238]) : para('No server is attached to a load balancer or Auto Scaling group.'));
   out.push(h2(`${num}.2 Recommendations`));
   const recs = a.instances.flatMap((i) => i.recommendations.map((x) => [i.name || i.instanceId, x]));
   out.push(recs.length ? table(['Server', 'Recommendation'], recs, [3000, 11838]) : para([run('No monitoring gaps found.', { bold: true, color: '116530' })]));
-  out.push(h2(`${num}.3 CPU and RAM, last 8 days`));
+  out.push(h2(`${num}.3 CPU and RAM, last ${a.period.days} days`));
   let drawn = false;
   for (const i of a.instances.filter((x) => x.state === 'running').slice(0, 25)) {
     const c = chartImage(cpuChart(i, a.period)); const m = chartImage(memChart(i, a.period));
@@ -231,11 +232,13 @@ async function buildDocx(r) {
     body.push(para('No EC2 instances found.'));
   }
 
-  /* 2-4. GuardDuty, Inspector, Security Hub */
+  /* AMC server details, then GuardDuty, Inspector and Security Hub last */
   body.push(...networkSection(r));
 
+  if (r.amc) body.push(...amcSection(r, 3));
+
   SERVICES.forEach(([key, name, sub], idx) => {
-    body.push(h1(`${idx + 3}. ${name}`));
+    body.push(h1(`${idx + 3 + (r.amc ? 1 : 0)}. ${name}`));
     const recs = groupServiceRecs(r.findings, key);
     if (recs.length) recs.forEach((f) => body.push(...recBlock(f)));
     else body.push(para([run('Enabled in every region that runs EC2 instances.', { bold: true, color: '116530' })]));
@@ -246,8 +249,6 @@ async function buildDocx(r) {
       body.push(...findingsTable(list));
     }
   });
-
-  if (r.amc) body.push(...amcSection(r, SERVICES.length + 3));
 
   /* Appendix */
   body.push(h1('Appendix: security services by region'));

@@ -20,8 +20,8 @@ function renderServer(i, period) {
 <table><tr><th>VPC flow logs</th><th>Load balancer logs</th><th>CloudTrail</th></tr>
 <tr><td>${logBadge(i.logging.vpcFlowLogs)}</td><td>${logBadge(i.logging.loadBalancerLogs)}</td><td>${logBadge(i.logging.cloudtrail)}</td></tr></table>
 ${i.state === 'running' ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin:10px 0">
-<div><div class="meta">CPU, last 8 days${i.cpu ? ` (avg ${i.cpu.average}%, peak ${i.cpu.peak}%)` : ''}</div>${cpuChart(i, period) || '<p class="meta">No CPU data returned.</p>'}</div>
-<div><div class="meta">RAM, last 8 days${i.memory ? ` (avg ${i.memory.average}%, peak ${i.memory.peak}%)` : ''}</div>${memChart(i, period) || '<p class="meta">No RAM metrics in CloudWatch.</p>'}</div></div>` : '<p class="meta">Server is not running; no recent metrics.</p>'}
+<div><div class="meta">CPU, last ${period.days || 8} days${i.cpu ? ` (avg ${i.cpu.average}%, peak ${i.cpu.peak}%)` : ''}</div>${cpuChart(i, period) || '<p class="meta">No CPU data returned.</p>'}</div>
+<div><div class="meta">RAM, last ${period.days || 8} days${i.memory ? ` (avg ${i.memory.average}%, peak ${i.memory.peak}%)` : ''}</div>${memChart(i, period) || '<p class="meta">No RAM metrics in CloudWatch.</p>'}</div></div>` : '<p class="meta">Server is not running; no recent metrics.</p>'}
 <h4>Storage</h4>
 <p>${st.volumes.length} EBS volume(s), ${st.provisionedGiB} GiB provisioned${st.usedGiB !== null ? `, about ${st.usedGiB} GiB used and ${st.freeGiB} GiB free` : ''}.${st.note ? ` <span class="meta">${esc(st.note)}</span>` : ''}</p>
 <table><tr><th>Volume</th><th>Device</th><th>Size</th><th>Type</th><th>Encrypted</th></tr>${vols}</table>
@@ -29,6 +29,18 @@ ${fs ? `<table><tr><th>Filesystem</th><th>Usage</th></tr>${fs}</table>` : ''}
 <h4>Load balancer / Auto Scaling health</h4>${health}
 ${i.recommendations.map((r) => `<p><b>Recommendation:</b> ${esc(r)}</p>`).join('')}
 </div>`;
+}
+
+const pct = (v) => (v === null || v === undefined ? '—' : `${v}%`);
+const gib = (v) => (v === null || v === undefined ? '<span class="meta">not reported</span>' : `${v} GiB`);
+
+// One row per server: CPU and RAM average/peak, EBS volumes, assigned / utilised / available storage
+function serverTable(a) {
+  const rows = a.instances.map((i) => `<tr><td><b>${esc(i.name || i.instanceId)}</b><div class="meta">${esc(i.instanceId)} · ${esc(i.region)}</div></td><td>${esc(i.state)}</td>
+    <td>${pct(i.cpu?.average)}</td><td>${pct(i.cpu?.peak)}</td>
+    <td>${i.memory ? pct(i.memory.average) : '<span class="meta">not reported</span>'}</td><td>${i.memory ? pct(i.memory.peak) : '<span class="meta">not reported</span>'}</td>
+    <td>${i.storage.volumes.length}</td><td>${i.storage.provisionedGiB} GiB</td><td>${gib(i.storage.usedGiB)}</td><td>${gib(i.storage.freeGiB)}</td></tr>`).join('');
+  return `<table><tr><th>Server</th><th>State</th><th>CPU avg</th><th>CPU peak</th><th>RAM avg</th><th>RAM peak</th><th>EBS volumes</th><th>Storage assigned</th><th>Storage utilised</th><th>Storage available</th></tr>${rows}</table>`;
 }
 
 function renderAmcSection(r, num) {
@@ -42,7 +54,8 @@ function renderAmcSection(r, num) {
 <div class="c"><div class="n">${s.ssmMissing}</div><div class="l">No SSM agent</div></div>
 <div class="c"><div class="n">${s.unhealthy}</div><div class="l">Unhealthy</div></div>
 <div class="c"><div class="n">${s.flowLogsGaps}</div><div class="l">No VPC flow logs</div></div></div>
-<p class="meta">Metrics cover ${a.period.days} days at hourly resolution (${esc(a.period.start.slice(0, 10))} to ${esc(a.period.end.slice(0, 10))}). RAM and disk usage come from the CloudWatch agent; they are not available without it.</p>
+<p class="meta">Metrics cover the last ${a.period.days} days at hourly resolution (${esc(a.period.start.slice(0, 10))} to ${esc(a.period.end.slice(0, 10))}). RAM and in-server disk usage come from the CloudWatch agent; they are not available without it.</p>
+${a.instances.length ? serverTable(a) : ''}
 ${a.instances.length ? a.instances.map((i) => renderServer(i, a.period)).join('') : '<p>No servers found.</p>'}`;
 }
 

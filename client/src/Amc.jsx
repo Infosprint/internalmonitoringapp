@@ -40,9 +40,9 @@ function ServerDetail({ i, period }) {
     <div className="amc-detail">
       {i.state === 'running' ? (
         <div className="charts">
-          <div><div className="muted">CPU, last 8 days{i.cpu ? ` (avg ${i.cpu.average}%, peak ${i.cpu.peak}%)` : ''}</div>
+          <div><div className="muted">CPU, last {period.days} days{i.cpu ? ` (avg ${i.cpu.average}%, peak ${i.cpu.peak}%)` : ''}</div>
             {i.cpu ? <LineChart title="CPU" startMs={start} series={[{ name: 'CPU average', color: '#1a73e8', values: i.cpu.avg }, { name: 'CPU peak', color: '#d93025', values: i.cpu.max, dash: true }]} /> : <p className="muted">No CPU data returned.</p>}</div>
-          <div><div className="muted">RAM, last 8 days{i.memory ? ` (avg ${i.memory.average}%, peak ${i.memory.peak}%)` : ''}</div>
+          <div><div className="muted">RAM, last {period.days} days{i.memory ? ` (avg ${i.memory.average}%, peak ${i.memory.peak}%)` : ''}</div>
             {i.memory ? <LineChart title="RAM" startMs={start} series={[{ name: 'RAM average', color: '#188038', values: i.memory.avg }, { name: 'RAM peak', color: '#f29900', values: i.memory.max, dash: true }]} /> : <p className="muted">No RAM metrics in CloudWatch.</p>}</div>
         </div>
       ) : <p className="muted">Server is not running; no recent metrics.</p>}
@@ -77,25 +77,25 @@ export function AmcOverview({ clientId }) {
       <h2>AMC server details <span className="muted">(last scan {new Date(data.scannedAt).toLocaleString()})</span></h2>
       <p className="muted">{s.servers} server(s) · {s.memoryMissing} without RAM metrics · {s.ssmMissing} without SSM agent · {s.unhealthy} unhealthy behind a load balancer/ASG · {s.flowLogsGaps} without full VPC flow logs · {s.cloudtrailGaps} without CloudTrail</p>
       {!a.instances.length ? <p className="muted">No servers found.</p> : (
-        <table>
-          <thead><tr><th>Server</th><th>State</th><th>CPU avg/peak</th><th>RAM avg/peak</th><th>EBS</th><th>VPC flow logs</th><th>LB logs</th><th>CloudTrail</th><th /></tr></thead>
+        <div className="tablewrap"><table>
+          <thead><tr><th>Server</th><th>CPU avg</th><th>CPU peak</th><th>RAM avg</th><th>RAM peak</th><th>EBS</th><th>Assigned</th><th>Utilised</th><th>Available</th><th>VPC logs</th><th>LB logs</th><th>CloudTrail</th><th /></tr></thead>
           <tbody>
             {a.instances.map((i) => (
               <React.Fragment key={i.instanceId}>
                 <tr>
                   <td><span className="server-name"><span className={`dot ${i.state}`} /><b>{i.name || i.instanceId}</b></span><div className="muted">{i.instanceId} · {i.instanceType} · {i.region}</div>{ssmBadge(i.ssm.status)}</td>
-                  <td>{i.state}</td>
-                  <td>{i.cpu ? `${i.cpu.average}% / ${i.cpu.peak}%` : '—'}</td>
-                  <td>{i.memory ? `${i.memory.average}% / ${i.memory.peak}%` : <span className="muted">not reported</span>}</td>
-                  <td>{i.storage.volumes.length} · {i.storage.provisionedGiB} GiB</td>
+                  <td>{i.cpu ? `${i.cpu.average}%` : '—'}</td><td>{i.cpu ? `${i.cpu.peak}%` : '—'}</td>
+                  <td>{i.memory ? `${i.memory.average}%` : <span className="muted">n/a</span>}</td><td>{i.memory ? `${i.memory.peak}%` : <span className="muted">n/a</span>}</td>
+                  <td>{i.storage.volumes.length}</td><td>{i.storage.provisionedGiB} GiB</td>
+                  <td>{i.storage.usedGiB !== null ? `${i.storage.usedGiB} GiB` : <span className="muted">n/a</span>}</td><td>{i.storage.freeGiB !== null ? `${i.storage.freeGiB} GiB` : <span className="muted">n/a</span>}</td>
                   <td>{logBadge(i.logging.vpcFlowLogs)}</td><td>{logBadge(i.logging.loadBalancerLogs)}</td><td>{logBadge(i.logging.cloudtrail)}</td>
                   <td><button onClick={() => setOpen({ ...open, [i.instanceId]: !open[i.instanceId] })}>{open[i.instanceId] ? 'Hide' : 'Details'}</button></td>
                 </tr>
-                {open[i.instanceId] && <tr><td colSpan="9"><ServerDetail i={i} period={a.period} /></td></tr>}
+                {open[i.instanceId] && <tr><td colSpan="13"><ServerDetail i={i} period={a.period} /></td></tr>}
               </React.Fragment>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </section>
   );

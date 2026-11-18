@@ -14,7 +14,7 @@ function running(clientId) {
 }
 
 // Each client is scanned with its own role and produces its own separate report.
-function startJob(clients) {
+function startJob(clients, options = {}) {
   const job = {
     id: crypto.randomUUID(), status: 'running', startedAt: new Date().toISOString(), finishedAt: null,
     items: clients.map((c) => ({ clientId: c.id, clientName: c.clientName, status: 'queued', message: 'Queued', report: null })),
@@ -22,10 +22,11 @@ function startJob(clients) {
   jobs.set(job.id, job);
   (async () => {
     for (const item of job.items) {
+      if (options.mode) { try { store.setPartnerType(item.clientId, options.mode); } catch { /* keep current type */ } }
       const client = store.get(item.clientId);
       item.status = 'running';
       try {
-        const report = await scanClient(client, (m) => { item.message = m; });
+        const report = await scanClient(client, (m) => { item.message = m; }, { range: options.range });
         const saved = saveReport(report);
         item.status = 'done';
         item.message = `${report.summary.totalInstances} instances, ${report.summary.findings.total} findings`;

@@ -21,4 +21,8 @@ const inst = { region: 'ap-south-1', instanceId: 'i-1', name: 'web', state: 'run
   health: [{ kind: 'targetGroup', lb: 'alb', group: 'tg', state: 'unhealthy', reason: 'Target.Timeout' }], logging: { vpcFlowLogs: 'NONE', loadBalancerLogs: 'DISABLED', cloudtrail: 'ENABLED' }, recommendations: ['Install the Amazon CloudWatch agent'] };
 const html = renderAmcSection({ amc: { period: { start: '2026-01-01T00:00:00Z', end: '2026-01-09T00:00:00Z', days: 8 }, instances: [inst], summary: { servers: 1, memoryMissing: 1, ssmMissing: 1, unhealthy: 1, flowLogsGaps: 1 } } }, 6);
 assert.ok(html.includes('No RAM metrics') && html.includes('CloudWatch agent') && html.includes('Target.Timeout'));
+const { evaluateVpcs } = require('./network');
+const vpcs = [{ VpcId: 'vpc-used', IsDefault: true }, { VpcId: 'vpc-empty', IsDefault: true }];
+const enis = [{ NetworkInterfaceId: 'eni-1', VpcId: 'vpc-used', Status: 'in-use' }];
+assert.deepStrictEqual(evaluateVpcs({ vpcs, flowLogs: [], subnets: [], enis }).map((v) => v.vpcId), ['vpc-used']);
 console.log('partner/AMC tests passed');

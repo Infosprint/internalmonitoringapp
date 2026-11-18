@@ -111,17 +111,24 @@ app.get('/api/clients/:id/logs/jobs/:job/download', wrap((req, res) => {
 }));
 
 /* scanning */
+// mode (amc | billing) and range (1w | 1m) are chosen in the console every time a scan starts
+const scanOptions = (body, allowMode) => {
+  const b = body || {};
+  const mode = allowMode && ['amc', 'billing'].includes(b.mode) ? b.mode : undefined;
+  const range = ['1w', '1m'].includes(b.range) ? b.range : '1w';
+  return { mode, range };
+};
 app.post('/api/scan/all', wrap((req, res) => {
   const clients = store.list().filter((c) => !jobs.running(c.id));
   if (!clients.length) throw new Error('No clients to scan (none registered, or all are already being scanned)');
-  res.status(202).json(jobs.startJob(clients));
+  res.status(202).json(jobs.startJob(clients, scanOptions(req.body, false)));
 }));
 app.post('/api/scan/:id', wrap((req, res) => {
   const client = store.get(req.params.id);
   if (!client) throw Object.assign(new Error('Client not found'), { status: 404 });
   const existing = jobs.running(client.id);
   if (existing) return res.status(202).json(existing);
-  res.status(202).json(jobs.startJob([client]));
+  res.status(202).json(jobs.startJob([client], scanOptions(req.body, true)));
 }));
 app.get('/api/jobs/:id', wrap((req, res) => {
   const j = jobs.get(req.params.id);
