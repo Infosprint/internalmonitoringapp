@@ -211,15 +211,15 @@ function cloudFrontSection(r, num) {
   const out = [h1(`${num}. CloudFront`)];
   if (!r.cloudfrontService) return [...out, para('This report was created before this check was added. Run a new scan to include it.')];
   if (r.cloudfrontService.failed) return [...out, para('This review could not be completed. See the scan warnings.')];
+  if (!r.cloudfrontService.distributions.length) return [...out, para('No CloudFront distributions found.')];
   const t = cfTables(r.cloudfrontService);
-  if (r.cloudfrontService.distributions.length) {
-    out.push(para('Traffic and error figures cover the last 7 days.'));
-    out.push(svcTable(t.main, [2800, 1000, 1200, 800, 800, 1300, 1100, 1000, 800, 2038]));
-    out.push(h2(`${num}.1 Recommendations`));
-    out.push(t.recs.rows.length ? svcTable(t.recs, [3600, 11238]) : para([run('No recommendations.', { bold: true, color: '116530' })]));
-  } else out.push(para('No CloudFront distributions found.'));
-  out.push(h2(`${num}.${r.cloudfrontService.distributions.length ? 2 : 1} What the AMC team should monitor for CloudFront`));
-  out.push(svcTable(t.monitor, [2600, 7000, 5238]));
+  out.push(h2(`${num}.1 Traffic and performance (last 7 days)`));
+  out.push(svcTable(t.traffic, [2800, 1300, 1400, 1700, 1700, 1500, 2000, 2438]));
+  out.push(h2(`${num}.2 Configuration and monitoring`));
+  out.push(svcTable(t.config, [2800, 1000, 1700, 1400, 1100, 2300, 2000, 2538]));
+  if (t.invalidations.rows.length) { out.push(h2(`${num}.3 Recent invalidations`)); out.push(svcTable(t.invalidations, [4000, 3500, 2500, 4838])); }
+  out.push(h2(`${num}.4 Recommendations`));
+  out.push(t.recs.rows.length ? svcTable(t.recs, [3600, 11238]) : para([run('No recommendations.', { bold: true, color: '116530' })]));
   return out;
 }
 

@@ -44,7 +44,7 @@ Each client has a partner type, set from the **General** tab of the client list 
 
 ## What the report contains
 
-Server overview (AMC only, first), 1 Backup, 2 Network exposure and logging, 3 S3 buckets (size, objects, storage classes, bucket policy review, versioning, replication), 4 RDS (status, pending updates, 7-day CPU/RAM/storage, recommendations), 5 CloudFront (distributions, invalidations, traffic and errors, alarms, what the AMC team should monitor), then 6 GuardDuty, 7 Inspector, 8 Security Hub. The three security services list only findings first detected in the last 7 days (`FINDINGS_DAYS` changes this). Reports contain no charts: servers show 7-day average and peak. The 6-month CPU, RAM and storage charts are in the console (open a server's Details on an AMC client page).
+Server overview (AMC only, first), 1 Backup, 2 Network exposure and logging, 3 S3 buckets (size, objects, storage classes, bucket policy review, versioning, replication), 4 RDS (status, pending updates, 7-day CPU/RAM/storage, recommendations), 5 CloudFront (7-day requests, data transferred, 4xx/5xx and total error rates, cache hit rate and origin latency when additional metrics are on, invalidations, alarms and their state, logging, WAF, certificate expiry), then 6 GuardDuty, 7 Inspector, 8 Security Hub. The three security services list only findings first detected in the last 7 days (`FINDINGS_DAYS` changes this). Reports contain no charts: servers show 7-day average and peak. The 6-month CPU, RAM and storage charts are in the console (open a server's Details on an AMC client page).
 
 ## Run it (Windows PowerShell, in this project folder)
 

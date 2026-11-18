@@ -9,20 +9,6 @@ const { MAX_ATTEMPTS, mapLimit, errMsg, chunk } = require('./aws');
 const DAYS = 7;
 const r1 = (n) => Math.round(n * 10) / 10;
 
-// What the AMC team should keep watching for CloudFront (shown in the report)
-const MONITOR_LIST = [
-  ['5xx error rate', 'Alert when 5xxErrorRate stays above 1-2% for 5-10 minutes. It usually means the origin is failing.', 'CloudWatch alarm on 5xxErrorRate (needs the distribution in us-east-1 metrics).'],
-  ['4xx error rate', 'Watch for sudden rises (broken links, blocked requests, expired signed URLs).', 'CloudWatch alarm on 4xxErrorRate.'],
-  ['Origin health and latency', 'Slow or failing origins surface as 5xx and high latency. Enable additional metrics for OriginLatency and cache hit rate.', 'Enable "Additional metrics" on the distribution.'],
-  ['Cache hit ratio', 'A falling hit ratio raises origin load and cost. Review cache policies and query-string/header forwarding.', 'CacheHitRate (additional metrics).'],
-  ['Invalidations', 'Check that invalidations complete and are not run constantly (the first 1,000 paths per month are free, then charged).', 'ListInvalidations; alert on InProgress for long periods.'],
-  ['Traffic and data transfer', 'Spikes in Requests or BytesDownloaded may mean an attack, a bot, or a cost surprise.', 'CloudWatch alarm on Requests / BytesDownloaded against the normal range.'],
-  ['TLS certificate expiry', 'An expired certificate takes the site down. ACM renews automatically only when DNS/email validation stays in place.', 'Alarm on days to expiry (ACM DaysToExpiry).'],
-  ['WAF and security', 'Confirm a web ACL is attached and review blocked/allowed request trends.', 'AWS WAF metrics and logging.'],
-  ['Access logging', 'Standard or real-time logs are needed for investigations and audits.', 'Logging enabled on each distribution.'],
-  ['Origin failover and TLS policy', 'Use origin groups for resilience and a modern minimum TLS version (TLSv1.2_2021).', 'Review distribution configuration after any change.'],
-];
-
 function distributionRecommendations(d) {
   const recs = [];
   if (!d.enabled) return ['The distribution is disabled. Confirm this is intended; disabled distributions serve no traffic.'];
@@ -32,6 +18,10 @@ function distributionRecommendations(d) {
   if (d.minTls && !/TLSv1\.2/.test(d.minTls)) recs.push(`Minimum TLS version is ${d.minTls}. Move to TLSv1.2_2021 or later.`);
   if (d.certificate && d.certificate.daysToExpiry !== null && d.certificate.daysToExpiry < 30) recs.push(`The viewer certificate expires in ${d.certificate.daysToExpiry} days. Check that ACM renewal/validation is working.`);
   if (d.metrics && d.metrics.errors5xxPeak >= 5) recs.push(`5xx error rate peaked at ${d.metrics.errors5xxPeak}% in the last ${DAYS} days. Check the origin health and logs.`);
+  if (d.alarmsInAlarm > 0) recs.push(`${d.alarmsInAlarm} CloudWatch alarm(s) for this distribution are in ALARM state right now. Investigate immediately.`);
+  if (d.metrics && !d.metrics.additionalMetrics && d.metrics.requests > 0) recs.push('Enable "Additional metrics" on the distribution so cache hit rate and origin latency can be monitored and reported.');
+  if (d.metrics && d.metrics.cacheHitRate !== null && d.metrics.cacheHitRate < 50) recs.push(`Cache hit rate is only ${d.metrics.cacheHitRate}%. Review cache policies, TTLs and query-string/header forwarding to cut origin load.`);
+  if (d.metrics && d.metrics.originLatencyPeakMs !== null && d.metrics.originLatencyPeakMs >= 3000) recs.push(`Origin latency peaked at ${d.metrics.originLatencyPeakMs} ms. Check origin performance and capacity.`);
   if (d.invalidations.inProgress > 0) recs.push(`${d.invalidations.inProgress} invalidation(s) are still in progress.`);
   if (d.invalidations.last7Days >= 50) recs.push(`${d.invalidations.last7Days} invalidations in the last ${DAYS} days. Prefer versioned file names to avoid frequent invalidations.`);
   return recs;
@@ -43,7 +33,7 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
   const items = []; let marker;
   do { const r = await cf.send(new ListDistributionsCommand({ Marker: marker })); items.push(...(r.DistributionList?.Items || [])); marker = r.DistributionList?.NextMarker; } while (marker);
   onProgress(`CloudFront: ${items.length} distribution(s)`);
-  if (!items.length) return { distributions: [], monitorList: MONITOR_LIST, summary: { distributions: 0, withRecommendations: 0 }, warnings };
+  if (!items.length) return { distributions: [], summary: { distributions: 0, withRecommendations: 0 }, warnings };
 
   const cw = new CloudWatchClient({ region: 'us-east-1', credentials, maxAttempts: MAX_ATTEMPTS });
   const acm = new ACMClient({ region: 'us-east-1', credentials, maxAttempts: MAX_ATTEMPTS });
@@ -57,7 +47,7 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
       for (const a of r.MetricAlarms || []) {
         if (a.Namespace !== 'AWS/CloudFront') continue;
         const id = (a.Dimensions || []).find((d) => d.Name === 'DistributionId')?.Value;
-        if (id) alarmed.set(id, (alarmed.get(id) || 0) + 1);
+        if (id) { const cur = alarmed.get(id) || { total: 0, inAlarm: 0 }; cur.total += 1; if (a.StateValue === 'ALARM') cur.inAlarm += 1; alarmed.set(id, cur); }
       }
       t = r.NextToken;
     } while (t);
@@ -70,7 +60,11 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
     const qs = [];
     items.forEach((d, k) => {
       const dims = [{ Name: 'DistributionId', Value: d.Id }, { Name: 'Region', Value: 'Global' }];
-      qs.push({ id: `r${k}`, metric: 'Requests', stat: 'Sum', dims }, { id: `e${k}`, metric: '5xxErrorRate', stat: 'Maximum', dims }, { id: `f${k}`, metric: '4xxErrorRate', stat: 'Maximum', dims }, { id: `b${k}`, metric: 'BytesDownloaded', stat: 'Sum', dims });
+      qs.push({ id: `r${k}`, metric: 'Requests', stat: 'Sum', dims }, { id: `e${k}`, metric: '5xxErrorRate', stat: 'Maximum', dims }, { id: `E${k}`, metric: '5xxErrorRate', stat: 'Average', dims },
+        { id: `f${k}`, metric: '4xxErrorRate', stat: 'Maximum', dims }, { id: `F${k}`, metric: '4xxErrorRate', stat: 'Average', dims }, { id: `t${k}`, metric: 'TotalErrorRate', stat: 'Average', dims },
+        { id: `b${k}`, metric: 'BytesDownloaded', stat: 'Sum', dims },
+        // these two exist only when 'Additional metrics' is turned on for the distribution
+        { id: `h${k}`, metric: 'CacheHitRate', stat: 'Average', dims }, { id: `l${k}`, metric: 'OriginLatency', stat: 'Average', dims }, { id: `L${k}`, metric: 'OriginLatency', stat: 'Maximum', dims });
     });
     const res = new Map();
     for (const part of chunk(qs, 400)) {
@@ -80,7 +74,12 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
     items.forEach((d, k) => {
       const sum = (id) => (res.get(id) || []).reduce((s, x) => s + x, 0);
       const peak = (id) => ((res.get(id) || []).length ? r1(Math.max(...res.get(id))) : null);
-      metrics.set(d.Id, { requests: Math.round(sum(`r${k}`)), bytesDownloadedGiB: r1(sum(`b${k}`) / 1024 ** 3), errors5xxPeak: peak(`e${k}`), errors4xxPeak: peak(`f${k}`) });
+      const avg = (id) => { const v = res.get(id) || []; return v.length ? r1(v.reduce((s, x) => s + x, 0) / v.length) : null; };
+      metrics.set(d.Id, {
+        requests: Math.round(sum(`r${k}`)), bytesDownloadedGiB: r1(sum(`b${k}`) / 1024 ** 3),
+        errors5xxPeak: peak(`e${k}`), errors5xxAvg: avg(`E${k}`), errors4xxPeak: peak(`f${k}`), errors4xxAvg: avg(`F${k}`), totalErrorAvg: avg(`t${k}`),
+        cacheHitRate: avg(`h${k}`), originLatencyAvgMs: avg(`l${k}`), originLatencyPeakMs: peak(`L${k}`), additionalMetrics: (res.get(`h${k}`) || []).length > 0 || (res.get(`l${k}`) || []).length > 0,
+      });
     });
   } catch (e) { warnings.push(`CloudFront metrics: ${errMsg(e)}`); }
 
@@ -89,7 +88,7 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
     const row = {
       id: d.Id, domain: d.DomainName, aliases: d.Aliases?.Items || [], comment: d.Comment || '', status: d.Status, enabled: Boolean(d.Enabled), priceClass: d.PriceClass, httpVersion: d.HttpVersion,
       origins: (d.Origins?.Items || []).map((o) => o.DomainName), webAcl: d.WebACLId || null, minTls: d.ViewerCertificate?.MinimumProtocolVersion || null,
-      logging: null, certificate: null, alarms: alarmed.get(d.Id) || 0, metrics: metrics.get(d.Id) || null, invalidations: { last7Days: 0, inProgress: 0, recent: [] },
+      logging: null, certificate: null, alarms: (alarmed.get(d.Id) || {}).total || 0, alarmsInAlarm: (alarmed.get(d.Id) || {}).inAlarm || 0, metrics: metrics.get(d.Id) || null, invalidations: { last7Days: 0, inProgress: 0, recent: [] },
     };
     try { const c = await cf.send(new GetDistributionConfigCommand({ Id: d.Id })); row.logging = Boolean(c.DistributionConfig?.Logging?.Enabled); } catch (e) { warnings.push(`CloudFront ${d.Id}: config: ${errMsg(e)}`); }
     try {
@@ -98,7 +97,7 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
       row.invalidations = {
         last7Days: list.filter((i) => new Date(i.CreateTime).getTime() >= start.getTime()).length,
         inProgress: list.filter((i) => i.Status === 'InProgress').length,
-        recent: list.slice(0, 5).map((i) => ({ id: i.Id, status: i.Status, created: i.CreateTime })),
+        recent: list.slice(0, 10).map((i) => ({ id: i.Id, status: i.Status, created: i.CreateTime })),
       };
     } catch (e) { warnings.push(`CloudFront ${d.Id}: invalidations: ${errMsg(e)}`); }
     const arn = d.ViewerCertificate?.ACMCertificateArn;
@@ -110,7 +109,7 @@ async function scanCloudFrontService({ credentials, onProgress = () => {} }) {
     distributions.push(row);
   });
   distributions.sort((a, b) => a.domain.localeCompare(b.domain));
-  return { distributions, monitorList: MONITOR_LIST, summary: { distributions: distributions.length, withRecommendations: distributions.filter((d) => d.recommendations.length).length }, warnings };
+  return { distributions, summary: { distributions: distributions.length, withRecommendations: distributions.filter((d) => d.recommendations.length).length }, warnings };
 }
 
-module.exports = { scanCloudFrontService, distributionRecommendations, MONITOR_LIST };
+module.exports = { scanCloudFrontService, distributionRecommendations };

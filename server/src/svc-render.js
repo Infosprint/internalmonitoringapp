@@ -40,10 +40,13 @@ ${t.recs.rows.length ? table(t.recs) : '<p class="ok-msg">No recommendations. Ev
 function renderCloudFront(r, n) {
   if (!r.cloudfrontService) return stale(n, 'CloudFront');
   if (r.cloudfrontService.failed) return failed(n, 'CloudFront');
+  if (!r.cloudfrontService.distributions.length) return `<h2>${n}. CloudFront</h2><p>No CloudFront distributions found.</p>`;
   const t = cfTables(r.cloudfrontService);
   return `<h2>${n}. CloudFront</h2>
-${r.cloudfrontService.distributions.length ? `<p class="meta">Traffic and error figures cover the last 7 days.</p>${table(t.main)}<h3>Recommendations</h3>${t.recs.rows.length ? table(t.recs) : '<p class="ok-msg">No recommendations.</p>'}` : '<p>No CloudFront distributions found.</p>'}
-<h3>What the AMC team should monitor for CloudFront</h3>${table(t.monitor)}`;
+<h3>Traffic and performance (last 7 days)</h3>${table(t.traffic)}
+<h3>Configuration and monitoring</h3>${table(t.config)}
+${t.invalidations.rows.length ? `<h3>Recent invalidations</h3>${table(t.invalidations)}` : '<p class="meta">No invalidations found.</p>'}
+<h3>Recommendations</h3>${t.recs.rows.length ? table(t.recs) : '<p class="ok-msg">No recommendations.</p>'}`;
 }
 
 module.exports = { renderS3, renderRds, renderCloudFront };

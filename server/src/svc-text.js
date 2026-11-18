@@ -57,20 +57,30 @@ function rdsTables(rds) {
 
 function cfTables(cf) {
   const list = cf.distributions || [];
-  const main = {
-    head: ['Distribution', 'State', 'Requests (7d)', '5xx peak', '4xx peak', 'Invalidations (7d / running)', 'Logging', 'WAF', 'Alarms', 'Certificate'],
+  const name = (d) => `${d.aliases[0] || d.domain} (${d.id})`;
+  const nd = (v, f = (x) => x) => (v === null || v === undefined ? 'No data' : f(v));
+  const traffic = {
+    head: ['Distribution', 'Requests (7d)', 'Data transferred', '4xx avg / peak', '5xx avg / peak', 'Total error rate (avg)', 'Cache hit rate', 'Origin latency avg / peak'],
+    rows: list.map((d) => {
+      const m = d.metrics;
+      if (!m) return [name(d), 'No data', 'No data', '—', '—', '—', '—', '—'];
+      return [name(d), m.requests.toLocaleString('en-US'), `${m.bytesDownloadedGiB} GiB`, `${nd(m.errors4xxAvg, pct)} / ${nd(m.errors4xxPeak, pct)}`,
+        (m.errors5xxPeak >= 5 ? bad : (x) => x)(`${nd(m.errors5xxAvg, pct)} / ${nd(m.errors5xxPeak, pct)}`), nd(m.totalErrorAvg, pct),
+        m.additionalMetrics ? nd(m.cacheHitRate, pct) : warn('Enable additional metrics'), m.additionalMetrics ? `${nd(m.originLatencyAvgMs, (v) => `${v} ms`)} / ${nd(m.originLatencyPeakMs, (v) => `${v} ms`)}` : warn('Enable additional metrics')];
+    }),
+  };
+  const config = {
+    head: ['Distribution', 'State', 'Invalidations (7d / running)', 'Access logging', 'WAF', 'CloudWatch alarms', 'Certificate', 'Minimum TLS'],
     rows: list.map((d) => [
-      `${d.aliases[0] || d.domain} (${d.id})`, d.enabled ? ok(d.status) : warn('Disabled'),
-      d.metrics ? d.metrics.requests.toLocaleString('en-US') : 'No data', d.metrics ? pct(d.metrics.errors5xxPeak) : '—', d.metrics ? pct(d.metrics.errors4xxPeak) : '—',
-      `${d.invalidations.last7Days} / ${d.invalidations.inProgress}`,
-      d.logging === null ? warn('Unknown') : d.logging ? ok('Enabled') : bad('Not enabled'),
-      d.webAcl ? ok('Attached') : bad('None'), d.alarms ? ok(`${d.alarms}`) : bad('None'),
-      d.certificate ? (d.certificate.daysToExpiry !== null && d.certificate.daysToExpiry < 30 ? bad : ok)(`${d.certificate.daysToExpiry ?? '?'} days left`) : 'Default / none',
+      name(d), d.enabled ? ok(d.status) : warn('Disabled'), `${d.invalidations.last7Days} / ${d.invalidations.inProgress}`,
+      d.logging === null ? warn('Unknown') : d.logging ? ok('Enabled') : bad('Not enabled'), d.webAcl ? ok('Attached') : bad('None'),
+      d.alarms ? (d.alarmsInAlarm ? bad : ok)(d.alarmsInAlarm ? `${d.alarms} (${d.alarmsInAlarm} in ALARM)` : `${d.alarms}, all OK`) : bad('None'),
+      d.certificate ? (d.certificate.daysToExpiry !== null && d.certificate.daysToExpiry < 30 ? bad : ok)(`${d.certificate.daysToExpiry ?? '?'} days left`) : 'Default / none', d.minTls || '—',
     ]),
   };
-  const recs = { head: ['Distribution', 'Recommendation'], rows: list.flatMap((d) => d.recommendations.map((r) => [d.aliases[0] || d.domain, r])) };
-  const monitor = { head: ['What to monitor', 'Why and what to watch', 'How'], rows: (cf.monitorList || []).map((m) => m) };
-  return { main, recs, monitor };
+  const invalidations = { head: ['Distribution', 'Invalidation', 'Status', 'Created (UTC)'], rows: list.flatMap((d) => d.invalidations.recent.map((i) => [name(d), i.id, i.status === 'Completed' ? ok(i.status) : warn(i.status), String(new Date(i.created).toISOString()).slice(0, 16).replace('T', ' ')])).slice(0, 25) };
+  const recs = { head: ['Distribution', 'Recommendation'], rows: list.flatMap((d) => d.recommendations.map((r) => [name(d), r])) };
+  return { traffic, config, invalidations, recs };
 }
 
 module.exports = { s3Tables, rdsTables, cfTables, fmtBytes };
